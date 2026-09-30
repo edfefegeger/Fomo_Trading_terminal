@@ -254,9 +254,9 @@
     // Сколько токена на балансе, в целых единицах
     rawBalance: async (tokenId) => {
       const bals = await api.balances();
-      const row = (bals.balances || []).find((b) => b.tokenId === tokenId);
+      const row = (bals.balances || []).find((b) => b.balance?.tokenId === tokenId);
       if (!row) throw new Error('нет баланса по ' + tokenId);
-      return String(row.balance);
+      return String(row.balance.balance);
     },
 
     // Полный цикл: подготовка, подпись, проверка окна по блокам, отправка, ожидание статуса.

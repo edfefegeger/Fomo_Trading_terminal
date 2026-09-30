@@ -132,7 +132,7 @@ export async function trade(name, { inTokenId, outTokenId, amount, maxWaitMs = 6
 
   const started = Date.now();
   while (Date.now() - started < maxWaitMs) {
-    const st = await swapStatus(name, relaySwapId);
+    const st = (await api.rpc('getSignatureStatuses', [[sig], { searchTransactionHistory: true }]))?.value?.[0];
     const state = String(st?.status || st?.state || '').toUpperCase();
     if (['SUCCESS', 'COMPLETED', 'FILLED'].includes(state)) return st;
     if (['FAILED', 'REFUNDED', 'CANCELLED'].includes(state)) throw new FomoApiError(`сделка не прошла: ${state}`);
