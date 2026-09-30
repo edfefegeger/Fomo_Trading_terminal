@@ -242,7 +242,7 @@
           const res = await fetch(host, {
             method: 'POST',
             headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jsonrpc: '1.88', id: 1, method, params }),
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
           });
           const json = await res.json();
           if (json.result !== undefined) return json.result;
@@ -282,7 +282,7 @@
       const started = Date.now();
       while (Date.now() - started < waitSeconds * 1000) {
         await new Promise((r) => setTimeout(r, 1500));
-        const st = (await api.rpc('getSignatureStatuses', [[sig], { searchTransactionHistory: true }]))?.[0];
+        const st = (await api.rpc('getSignatureStatuses', [[sig], { searchTransactionHistory: true }]))?.value?.[0];
         if (st && st.confirmationStatus) {
           if (st.err) throw new Error('транзакция упала: ' + JSON.stringify(st.err));
           log(`${direction}: статус ${st.confirmationStatus}`);
