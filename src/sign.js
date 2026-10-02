@@ -53,6 +53,18 @@ export function signSwapTransaction(txBase64, keypair) {
   }
 }
 
+// Список программ, которые вызывает транзакция. Нужен серверу, чтобы логировать и проверять белый список перед подписью.
+export function programIds(txBase64) {
+  const raw = Buffer.from(txBase64, 'base64');
+  try {
+    const tx = Transaction.from(raw);
+    return [...new Set(tx.instructions.map((i) => i.programId.toBase58()))];
+  } catch {
+    const m = VersionedTransaction.deserialize(raw).message;
+    return [...new Set(m.compiledInstructions.map((i) => m.staticAccountKeys[i.programIdIndex].toBase58()))];
+  }
+}
+
 // Проверка: убедиться, что в транзакции действительно нужна наша подпись,
 // и что к ней уже приложена подпись их плательщика.
 export function inspectTransaction(txBase64) {
