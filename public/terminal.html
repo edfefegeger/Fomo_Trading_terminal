@@ -1615,24 +1615,16 @@
     });
 
     document.querySelector("[data-action='create-project']").addEventListener("click", () => {
-      const id = Math.max(...state.projects.map((project) => project.id)) + 1;
-      const ticker = `$M${id}`;
-      const name = document.getElementById("projectNameInput").value.trim() || `Momentum ${id}`;
-      const mint = document.getElementById("projectMintInput").value.trim() || `MintDemo${id}`;
-      state.projects.unshift({
-        id,
-        ticker,
-        name,
-        mint,
-        cap: `$${(0.8 + Math.random() * 7).toFixed(1)}M`,
-        holders: `${(2 + Math.random() * 28).toFixed(1)}K`,
-        liquidity: `$${Math.floor(100 + Math.random() * 900)}K`,
-        supply: `${Math.floor(300 + Math.random() * 700)}M`,
-        supplyRaw: Math.floor(300000000 + Math.random() * 700000000),
-        tax: "0/0",
-        age: `${Math.floor(8 + Math.random() * 90)}m`,
-      });
+      const mint = document.getElementById("projectMintInput").value.trim().split(":")[0];
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) { alert("Нужен настоящий адрес mint токена Solana (32–44 символа)"); return; }
+      if (state.projects.some((project) => project.mint === mint)) { alert("Такой проект уже добавлен"); return; }
+      const id = Math.max(0, ...state.projects.map((project) => project.id)) + 1;
+      const name = document.getElementById("projectNameInput").value.trim().replace(/[<>&"']/g, "") || mint.slice(0, 6);
+      const ticker = "$" + name.replace(/^\$/, "").slice(0, 8).toUpperCase();
+      state.projects = state.projects.filter((project) => project.mint); // убираем заглушку
+      state.projects.unshift({ id, ticker, name, mint, cap: "—", holders: "—", liquidity: "—", supply: "—", supplyRaw: 0, tax: "—", age: "—" });
       state.activeProjectId = id;
+      if (window.loadProjectToken) setTimeout(window.loadProjectToken, 0);
       closeProjectModal();
       render();
     });
@@ -1791,11 +1783,11 @@
         <button class="wallet-item ${wallet.id === state.activeWalletId ? "active" : ""}" data-wallet-id="${wallet.id}">
           <div class="wallet-line">
             <strong>${wallet.name}</strong>
-            <span class="${wallet.pnl >= 0 ? "positive" : "negative"}">${wallet.pnl >= 0 ? "+" : ""}${wallet.pnl}%</span>
+            <span class="${pnlClass(wallet)}">${pnlText(wallet)}</span>
           </div>
           <div class="wallet-line">
             <span class="wallet-address">${wallet.address}</span>
-            <span class="muted">${wallet.balance} SOL</span>
+            <span class="muted">${balText(wallet)}</span>
           </div>
         </button>
       `).join("");
@@ -1810,11 +1802,11 @@
       const wallet = activeWallet();
       els.walletTitle.textContent = wallet.name;
       els.walletAddress.textContent = wallet.address;
-      els.walletBalance.textContent = `${wallet.balance} SOL`;
-      els.walletPnl.textContent = `${wallet.pnl >= 0 ? "+" : ""}${wallet.pnl}%`;
-      els.walletPnl.className = wallet.pnl >= 0 ? "positive" : "negative";
+      els.walletBalance.textContent = wallet.live ? `${formatUsd(wallet.usdc)} USDC` : `${wallet.balance} SOL`;
+      els.walletPnl.textContent = pnlText(wallet);
+      els.walletPnl.className = pnlClass(wallet);
       els.walletTrades.textContent = wallet.trades;
-      els.walletWinrate.textContent = `${wallet.winrate}%`;
+      els.walletWinrate.textContent = wallet.live ? "—" : `${wallet.winrate}%`;
 
       els.walletTradesTable.innerHTML = walletTradeRows(wallet).map((trade) => `
         <tr>
@@ -1823,7 +1815,7 @@
           <td><span class="side ${trade.side.toLowerCase()}">${trade.side}</span></td>
           <td>${trade.amount}</td>
           <td>${trade.supply}</td>
-          <td class="${trade.pnl.startsWith("+") ? "positive" : "negative"}">${trade.pnl}</td>
+          <td class="${trade.pnl.startsWith("+") ? "positive" : trade.pnl.startsWith("-") ? "negative" : "muted"}">${trade.pnl}</td>
         </tr>
       `).join("");
 
@@ -1885,8 +1877,10 @@
         metricHtml("Market cap", project.cap),
         metricHtml("FOMO holders", project.holders),
         metricHtml("Supply", project.supply),
-        metricHtml("Общий баланс", `$${formatNumber(totalUsdc)} · ${formatCompact(totalTokens)} tokens`),
-        metricHtml("Общий PnL", `${weightedPnl >= 0 ? "+" : ""}${weightedPnl.toFixed(1)}%`, weightedPnl >= 0 ? "positive" : "negative"),
+        metricHtml("Общий баланс", `${formatUsd(totalUsdc)} · ${formatCompact(totalTokens)} tokens`),
+        state.wallets.some((w) => w.live)
+          ? metricHtml("Общий PnL", "—")
+          : metricHtml("Общий PnL", `${weightedPnl >= 0 ? "+" : ""}${weightedPnl.toFixed(1)}%`, weightedPnl >= 0 ? "positive" : "negative"),
       ].join("");
     }
 
@@ -1895,7 +1889,7 @@
         <label class="wallet-select-row">
           <input type="checkbox" value="${wallet.id}" data-group="${wallet.group}" ${isChecked(wallet.id) ? "checked" : ""}>
           <span class="wallet-cell wallet-name" title="${wallet.name}">${wallet.name}</span>
-          <span class="wallet-cell wallet-usdc" title="$${formatNumber(wallet.usdc)}">$${formatNumber(wallet.usdc)}</span>
+          <span class="wallet-cell wallet-usdc" title="${formatUsd(wallet.usdc)}">${formatUsd(wallet.usdc)}</span>
           <span class="wallet-cell wallet-tokens" title="${formatCompact(walletTokens(wallet))}">${formatCompact(walletTokens(wallet))}</span>
           <span class="wallet-cell wallet-share">${supplyShare(walletTokens(wallet))}</span>
         </label>
@@ -2045,7 +2039,8 @@
 
     function supplyShare(tokens) {
       const project = activeProject();
-      return `${((tokens / project.supplyRaw) * 100).toFixed(2)}%`;
+      if (!project.supplyRaw) return "—";
+      return `${((tokens / project.supplyRaw) * 100).toFixed(4)}%`;
     }
 
     function activeWallet() {
@@ -2057,17 +2052,16 @@
     }
 
     function walletTradeRows(wallet) {
-      const projects = ["$FOMO", "$NOVA", "$BLITZ", "$MINT"];
-      return Array.from({ length: 7 }, (_, index) => {
-        const side = index % 3 === 0 ? "Sell" : "Buy";
-        const pnl = Number((wallet.pnl / 3 + index * 1.7 - 4).toFixed(1));
+      const rows = (state.journal || []).filter((t) => t.wallet === wallet.name).slice(0, 12);
+      return rows.map((t) => {
+        const p = state.projects.find((x) => x.mint === t.mint);
         return {
-          time: `${9 + index}:0${index}`,
-          project: projects[index % projects.length],
-          side,
-          amount: side === "Buy" ? `${(0.1 + index * 0.07).toFixed(2)} SOL` : `${10 + index * 3}%`,
-          supply: `${Math.floor(40 + index * 32)}K`,
-          pnl: `${pnl >= 0 ? "+" : ""}${pnl}%`,
+          time: new Date(t.ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+          project: p ? p.ticker : (t.mint || "").slice(0, 6) + "…",
+          side: t.side === "error" ? "Error" : t.side === "buy" ? "Buy" : "Sell",
+          amount: t.amount || "—",
+          supply: "—",
+          pnl: "—",
         };
       });
     }
@@ -2076,6 +2070,12 @@
       return Math.random().toString(36).slice(2, 6).toUpperCase();
     }
     // ---- хелперы для живых данных (вне адаптера, чтобы их видели render-функции) ----
+    function formatUsd(v) {
+      return "$" + Number(v || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    function balText(w) { return w.live ? formatUsd(w.usdc) : `${w.balance} SOL`; }
+    function pnlText(w) { return w.live ? "—" : `${w.pnl >= 0 ? "+" : ""}${w.pnl}%`; }
+    function pnlClass(w) { return w.live ? "muted" : (w.pnl >= 0 ? "positive" : "negative"); }
     function isChecked(id) {
       const el = document.querySelector('#walletChecks input[value="' + id + '"]');
       return !!(el && el.checked); // выбор переживает перерисовку; по умолчанию ничего не выбрано
@@ -2106,11 +2106,14 @@
       }
 
       // проекты (mint-ы) храним в браузере, ключей там нет
-      try {
-        const saved = JSON.parse(localStorage.getItem('terminal.projects') || 'null');
-        if (Array.isArray(saved) && saved.length) { state.projects = saved; state.activeProjectId = saved[0].id; }
-      } catch {}
-      setInterval(() => { try { localStorage.setItem('terminal.projects', JSON.stringify(state.projects)); } catch {} }, 3000);
+      // демо-проекты визуала (FomoPulse, NovaFlow, BlitzNet) с выдуманными mint убираем
+      const isDemo = (p) => !p.mint || /^(FoMo1|Nova2|Blitz3|MintDemo)/.test(p.mint);
+      let list = [];
+      try { const saved = JSON.parse(localStorage.getItem('terminal.projects') || 'null'); if (Array.isArray(saved)) list = saved; } catch {}
+      list = list.filter((p) => !isDemo(p));
+      if (!list.length) list = [{ id: 1, ticker: '—', name: 'Добавьте проект', mint: '', cap: '—', holders: '—', liquidity: '—', supply: '—', supplyRaw: 0, tax: '—', age: '—' }];
+      state.projects = list; state.activeProjectId = list[0].id;
+      setInterval(() => { try { localStorage.setItem('terminal.projects', JSON.stringify(state.projects.filter((p) => !isDemo(p)))); } catch {} }, 3000);
 
       async function loadWallets() {
         try {
@@ -2122,7 +2125,7 @@
             address: r.address.slice(0, 4) + '...' + r.address.slice(-4),
             group: r.group, online: r.online,
             balance: Number(r.sol.toFixed(3)), usdc: r.usdc, tokenMap: r.tokens,
-            pnl: 0, trades: r.trades, winrate: 0, statsError: r.statsError,
+            live: true, pnl: 0, trades: r.trades, winrate: 0, statsError: r.statsError,
           }));
           if (!state.wallets.some((w) => w.id === state.activeWalletId)) state.activeWalletId = state.wallets[0].id;
           state.walletGroups = ['all', ...new Set(state.wallets.map((w) => w.group).filter((g) => g && g !== 'all'))];
@@ -2133,7 +2136,8 @@
       async function loadTransactions() {
         try {
           const rows = await api('/transactions');
-          state.transactions = rows.map((t) => {
+          state.journal = rows;
+          state.transactions = rows.slice(0, 25).map((t) => {
             const p = state.projects.find((x) => x.mint === t.mint);
             const err = t.side === 'error';
             return {
@@ -2145,6 +2149,7 @@
             };
           });
           renderTransactions();
+          renderWallets();
         } catch (e) { log('транзакции:', e.message); }
       }
 
@@ -2158,8 +2163,13 @@
           // демо-цифры не оставляем рядом с реальным mint: cap/holders/liquidity нужен источник цены
           Object.assign(p, { supply: formatCompact(t.supply), supplyRaw: t.supply, cap: '—', holders: '—', liquidity: '—', tax: '—' });
           render();
-        } catch (e) { log('токен не найден ончейн:', e.message); }
+        } catch (e) {
+          p.supply = 'mint не найден'; render();
+          log('токен не найден ончейн:', e.message);
+        }
       }
+
+      window.loadProjectToken = loadToken;
 
       const selectedNames = () =>
         [...document.querySelectorAll('#walletChecks input:checked')]
@@ -2169,7 +2179,8 @@
         const raw = (els.tradeAmount.value || '').trim().replace(',', '.');
         if (side === 'sell') {
           const m = raw.match(/^(\d+(?:\.\d+)?)\s*%$/);
-          const percent = m ? Number(m[1]) : 100; // пусто или число без % = продать всё
+          if (!m) throw new Error('для продажи укажи процент, например 50% или 100%');
+          const percent = Number(m[1]);
           if (!(percent > 0 && percent <= 100)) throw new Error('процент продажи 1-100');
           return { percent, label: percent + '% баланса токена' };
         }
@@ -2188,6 +2199,7 @@
           const names = selectedNames();
           if (!names.length) throw new Error('не выбран ни один кошелёк');
           const p = activeProject();
+          if (!p.mint) throw new Error('сначала добавь проект с адресом mint');
           const amt = parseAmount(side);
           if (!confirm(`${side.toUpperCase()} ${p.ticker}\n${amt.label}\nКошельков: ${names.length}\n${names.join(', ')}\n\n${p.mint}`)) return;
 
@@ -2212,6 +2224,25 @@
       block("[data-action='create-wallet']", () => alert('Кошельки добавляются в accounts.config.json на сервере. Приватные ключи через браузерную форму не вводим.'));
       block("[data-action='delete-wallet']", () => alert('Кошельки удаляются в accounts.config.json.'));
       block("[data-action='toggle-task']", () => alert('Автоматизации пока не подключены к бэку.'));
+
+      // быстрые кнопки и значение по умолчанию зависят от Buy/Sell
+      const QUICK = { buy: ['1', '2', '5', '10'], sell: ['25%', '50%', '75%', '100%'] };
+      let lastSide = 'buy';
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('[data-side]')) return;
+        const side = state.tradeSide;
+        if (side === lastSide) return;
+        lastSide = side;
+        document.querySelectorAll('[data-amount]').forEach((b, i) => { b.textContent = QUICK[side][i]; b.dataset.amount = QUICK[side][i]; });
+        els.tradeAmount.value = side === 'sell' ? '100%' : '2';
+      });
+      // Fomo сам собирает транзакцию: эти параметры ни на что не влияют, не вводим в заблуждение
+      for (const id of ['slippage', 'priorityFee']) {
+        const el = document.getElementById(id);
+        el.disabled = true;
+        el.title = 'Пока не влияет: транзакцию собирает Fomo';
+        el.closest('.field').style.opacity = '.4';
+      }
 
       // опрос только своего сервера (он отдаёт кэш), пока вкладка видна
       setInterval(() => { if (!document.hidden) loadWallets(); }, 10000);
