@@ -9,12 +9,20 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import { loadKeypair, signSwapTransaction, programIds } from './sign.js';
+import { getPrices, portfolio, heldMints } from './portfolio.js';
 
 const root = new URL('../', import.meta.url);
 const cfg = JSON.parse(fs.readFileSync(new URL('accounts.config.json', root), 'utf8'));
 if (!cfg.agentToken || String(cfg.agentToken).length < 16) {
   console.error('В accounts.config.json нужен agentToken: случайная строка от 16 символов');
   process.exit(1);
+}
+
+const CONFIG_PATH = new URL('accounts.config.json', root);
+function saveConfig() {
+  const tmp = CONFIG_PATH.pathname + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  fs.renameSync(tmp, CONFIG_PATH.pathname);
 }
 
 const PORT = 8787;
@@ -117,6 +125,22 @@ function refreshStats() {
         delete tokens[USDC];
         stats.set(n, { sol: bal.result.value / 1e9, usdc, tokens, at: Date.now(), error: null });
       });
+
+      // цены и стоимость позиций: публичный Dexscreener, Fomo не трогаем
+      const mints = heldMints(stats);
+      if (mints.length) {
+        try {
+          const priceMap = await getPrices(mints);
+          for (const [name, pf] of portfolio(stats, journal, priceMap)) {
+            stats.set(name, {
+              ...(stats.get(name) || {}),
+              valueUsd: pf.valueUsd, pnl: pf.pnl, pnlPercent: pf.percent, invested: pf.spent,
+            });
+          }
+        } catch (e) {
+          log('[prices] ошибка, оставляю прошлые цены:', e.message);
+        }
+      }
     } catch (e) {
       for (const n of names) stats.set(n, { ...(stats.get(n) || {}), error: e.message });
       log('[stats] ошибка:', e.message);
@@ -276,6 +300,7 @@ http
           return {
             id: i + 1, name: a.name, address: a.address, group: a.group || 'all', online: online(a.name),
             sol: s.sol ?? 0, usdc: s.usdc ?? 0, tokens: s.tokens || {}, trades: trades[a.name] || 0,
+            pnl: s.pnl ?? 0, pnlPercent: s.pnlPercent ?? 0, valueUsd: s.valueUsd ?? 0, invested: s.invested ?? 0,
             statsAt: s.at || null, statsError: s.error || null,
           };
         }));
@@ -295,6 +320,58 @@ http
         // только со своей страницы: свой заголовок и свой origin
         if (req.headers['x-panel'] !== '1' || (origin && origin !== `http://${HOST}`)) return send(res, 403, { error: 'forbidden' });
         try { return send(res, 200, await runAll(await readJson(req))); } catch (e) { return send(res, 400, { error: e.message }); }
+      }
+
+      // --- управление кошельками из интерфейса ---
+      const panelOk = req.headers['x-panel'] === '1' && (!origin || origin === `http://${HOST}`);
+
+      if (req.method === 'GET' && url.pathname === '/accounts') {
+        return send(res, 200, [...accs.entries()].map(([name, a]) => ({
+          name, address: a.address, group: a.group || 'all', hasSecret: true,
+        })));
+      }
+      if (req.method === 'POST' && url.pathname === '/accounts') {
+        if (!panelOk) return send(res, 403, { error: 'forbidden' });
+        const { name, address, secret, group } = await readJson(req);
+        if (!/^[a-zA-Z0-9_-]{2,24}$/.test(String(name || ''))) return send(res, 400, { error: 'имя: 2-24 символа, буквы, цифры, дефис' });
+        if (accs.has(name)) return send(res, 400, { error: 'такое имя уже занято' });
+        if (!MINT_RE.test(String(address || ''))) return send(res, 400, { error: 'адрес не похож на solana' });
+        if (!/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(String(secret || ''))) return send(res, 400, { error: 'ключ должен быть base58, 64 байта' });
+        let kp;
+        try { kp = loadKeypair(secret); } catch (e) { return send(res, 400, { error: 'ключ не разбирается: ' + e.message }); }
+        if (kp.publicKey.toBase58() !== address) return send(res, 400, { error: 'ключ не от этого адреса' });
+        cfg.accounts.push({ id: (cfg.accounts.at(-1)?.id || 0) + 1, name, address, group: group || 'all', secret, usd: cfg.defaultUsd });
+        saveConfig();
+        accs.set(name, { name, usd: cfg.defaultUsd, group: group || 'all', kp, address });
+        log('[accounts] добавлен', name);
+        return send(res, 200, { ok: true, name });
+      }
+      if (req.method === 'PATCH' && url.pathname === '/accounts') {
+        if (!panelOk) return send(res, 403, { error: 'forbidden' });
+        const { name, group, newName } = await readJson(req);
+        const a = accs.get(name);
+        if (!a) return send(res, 404, { error: 'нет такого кошелька' });
+        const c = cfg.accounts.find((x) => x.name === name);
+        if (group) { a.group = group; if (c) c.group = group; }
+        if (newName && newName !== name && !accs.has(newName)) {
+          if (c) c.name = newName;
+          accs.delete(name);
+          accs.set(newName, { ...a, name: newName });
+        }
+        saveConfig();
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'DELETE' && url.pathname === '/accounts') {
+        if (!panelOk) return send(res, 403, { error: 'forbidden' });
+        const name = url.searchParams.get('name');
+        const i = cfg.accounts.findIndex((x) => x.name === name);
+        if (i < 0) return send(res, 404, { error: 'нет такого кошелька' });
+        cfg.accounts.splice(i, 1);
+        accs.delete(name);
+        stats.delete(name);
+        saveConfig();
+        log('[accounts] удалён', name);
+        return send(res, 200, { ok: true });
       }
 
       // --- агент: токен обязателен всегда. Origin fomo.family НЕ считается аутентификацией ---

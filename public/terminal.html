@@ -1322,6 +1322,22 @@
             </div>
 
             <div class="grid right-terminal-column">
+
+              <div class="panel" id="addWalletPanel">
+                <div class="section-head"><div><h3>Добавить кошелёк</h3></div></div>
+                <div class="panel-pad" style="display:grid;gap:8px">
+                  <input id="awName" placeholder="имя, например acc4" style="padding:8px">
+                  <input id="awGroup" placeholder="группа, например main" style="padding:8px">
+                  <input id="awAddress" placeholder="солановский адрес" style="padding:8px">
+                  <input id="awSecret" type="password" placeholder="приватный ключ base58" style="padding:8px">
+                  <div style="display:flex;gap:8px">
+                    <button class="btn btn-primary" id="awSave">Сохранить</button>
+                    <button class="btn" id="awReload">Обновить</button>
+                  </div>
+                  <div id="awStatus" style="font-size:12px;opacity:.75"></div>
+                </div>
+              </div>
+
               <div class="panel" data-region="terminal-wallet-selector">
                 <div class="section-head">
                   <div>
@@ -1878,9 +1894,15 @@
         metricHtml("FOMO holders", project.holders),
         metricHtml("Supply", project.supply),
         metricHtml("Общий баланс", `${formatUsd(totalUsdc)} · ${formatCompact(totalTokens)} tokens`),
-        state.wallets.some((w) => w.live)
-          ? metricHtml("Общий PnL", "—")
-          : metricHtml("Общий PnL", `${weightedPnl >= 0 ? "+" : ""}${weightedPnl.toFixed(1)}%`, weightedPnl >= 0 ? "positive" : "negative"),
+        (() => {
+          if (!state.wallets.some((w) => w.live)) {
+            return metricHtml("Общий PnL", `${weightedPnl >= 0 ? "+" : ""}${weightedPnl.toFixed(1)}%`, weightedPnl >= 0 ? "positive" : "negative");
+          }
+          const money = state.wallets.reduce((acc, w) => acc + pnlMoney(w), 0);
+          const invested = state.wallets.reduce((acc, w) => acc + Number(w.invested ?? 0), 0);
+          const pct = invested > 0 ? (money / invested) * 100 : 0;
+          return metricHtml("Общий PnL", `${money >= 0 ? "+" : "-"}${Math.abs(money).toFixed(2)} (${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%)`, money >= 0 ? "positive" : "negative");
+        })(),
       ].join("");
     }
 
@@ -2074,8 +2096,18 @@
       return "$" + Number(v || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
     function balText(w) { return w.live ? formatUsd(w.usdc) : `${w.balance} SOL`; }
-    function pnlText(w) { return w.live ? "—" : `${w.pnl >= 0 ? "+" : ""}${w.pnl}%`; }
-    function pnlClass(w) { return w.live ? "muted" : (w.pnl >= 0 ? "positive" : "negative"); }
+    function pnlMoney(w) { return Number(w.pnl ?? 0); }
+    function pnlText(w) {
+      const money = pnlMoney(w);
+      const pct = Number(w.pnlPercent ?? (w.invested ? (money / w.invested) * 100 : 0));
+      if (!money && !pct) return "0.00%";
+      return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}% (${money >= 0 ? "+" : "-"}${Math.abs(money).toFixed(2)})`;
+    }
+    function pnlClass(w) {
+      const v = pnlMoney(w);
+      return v > 0 ? "positive" : v < 0 ? "negative" : "muted";
+    }
+    function tokensValue(w) { return Number(w.valueUsd ?? 0); }
     function isChecked(id) {
       const el = document.querySelector('#walletChecks input[value="' + id + '"]');
       return !!(el && el.checked); // выбор переживает перерисовку; по умолчанию ничего не выбрано
@@ -2125,7 +2157,12 @@
             address: r.address.slice(0, 4) + '...' + r.address.slice(-4),
             group: r.group, online: r.online,
             balance: Number(r.sol.toFixed(3)), usdc: r.usdc, tokenMap: r.tokens,
-            live: true, pnl: 0, trades: r.trades, winrate: 0, statsError: r.statsError,
+            live: true,
+            pnl: Number(r.pnl ?? 0),
+            pnlPercent: Number(r.pnlPercent ?? 0),
+            valueUsd: Number(r.valueUsd ?? 0),
+            invested: Number(r.invested ?? 0),
+            trades: r.trades, winrate: 0, statsError: r.statsError,
           }));
           if (!state.wallets.some((w) => w.id === state.activeWalletId)) state.activeWalletId = state.wallets[0].id;
           state.walletGroups = ['all', ...new Set(state.wallets.map((w) => w.group).filter((g) => g && g !== 'all'))];
@@ -2164,7 +2201,7 @@
           Object.assign(p, { supply: formatCompact(t.supply), supplyRaw: t.supply, cap: '—', holders: '—', liquidity: '—', tax: '—' });
           render();
         } catch (e) {
-          p.supply = 'mint не найден'; render();
+          p.supply = '—'; render();
           log('токен не найден ончейн:', e.message);
         }
       }
@@ -2255,6 +2292,36 @@
     })();
 
     render();
+
+    // ---- добавление кошелька из интерфейса ----
+    (() => {
+      const btn = document.getElementById('awSave');
+      if (!btn) return;
+      const status = document.getElementById('awStatus');
+      const say = (t) => { status.textContent = t; };
+
+      btn.addEventListener('click', async () => {
+        const body = {
+          name: (document.getElementById('awName').value || '').trim(),
+          group: (document.getElementById('awGroup').value || '').trim() || 'all',
+          address: (document.getElementById('awAddress').value || '').trim(),
+          secret: (document.getElementById('awSecret').value || '').trim(),
+        };
+        say('сохраняю...');
+        try {
+          const r = await api('/accounts', { method: 'POST', headers: { 'X-Panel': '1' }, body: JSON.stringify(body) });
+          say(r.ok ? 'добавлен. открой профиль в dolphin и поставь агента' : ('ошибка: ' + (r.error || '?')));
+          document.getElementById('awSecret').value = '';
+          document.getElementById('awName').value = '';
+          document.getElementById('awAddress').value = '';
+          await loadWallets();
+        } catch (e) {
+          say('ошибка: ' + e.message);
+        }
+      });
+
+      document.getElementById('awReload')?.addEventListener('click', () => { say('обновляю...'); loadWallets().then(() => say('')); });
+    })();
   </script>
 </body>
 </html>
