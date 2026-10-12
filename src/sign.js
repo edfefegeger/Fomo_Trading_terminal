@@ -11,6 +11,7 @@
 
 import { Transaction, VersionedTransaction, Keypair, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
+import { ed25519 } from '@noble/curves/ed25519';
 
 // Ключ может прийти в любом из трёх видов, поддерживаем все.
 export function loadKeypair(secret) {
@@ -30,9 +31,51 @@ export function loadKeypair(secret) {
   return Keypair.fromSeed(bs58.decode(trimmed));
 }
 
+// ---------- формат v1 (SIMD-0385) ----------
+// Fomo стал отдавать транзакции нового формата. web3.js 1.x его разобрать не может,
+// поэтому подписываем по байтам. Раскладка:
+//   [0x81][3 байта заголовка: подписантов, readonly-подписантов, readonly-остальных][u32 маска конфигов]
+//   [32 байта blockhash][u8 число инструкций][u8 число адресов][адреса по 32 байта] ...инструкции...
+//   [подписи по 64 байта, в самом КОНЦЕ, без префикса длины]
+// Подписывается всё, что стоит до блока подписей (включая первый байт 0x81).
+const isV1 = (raw) => raw.length > 42 && raw[0] === 0x81;
+
+function v1Layout(raw) {
+  const numSigs = raw[1];
+  const sigStart = raw.length - numSigs * 64;
+  const addrStart = 42;
+  if (!numSigs || sigStart <= addrStart + numSigs * 32) throw new Error('v1: разбор раскладки не сошёлся (подписей ' + numSigs + ')');
+  const signers = [];
+  for (let i = 0; i < numSigs; i++) signers.push(raw.subarray(addrStart + i * 32, addrStart + (i + 1) * 32));
+  return { numSigs, sigStart, signers };
+}
+
+function signV1(raw, keypair) {
+  const { numSigs, sigStart, signers } = v1Layout(raw);
+  const me = keypair.publicKey.toBytes();
+  const idx = signers.findIndex((k) => Buffer.compare(Buffer.from(k), Buffer.from(me)) === 0);
+  if (idx < 0) throw new Error('v1: кошелька ' + keypair.publicKey.toBase58() + ' нет среди подписантов транзакции');
+  const message = raw.subarray(0, sigStart);
+
+  // самопроверка: подпись плательщика Fomo (если уже стоит) должна сходиться с нашим представлением о том, что подписывается.
+  for (let i = 0; i < numSigs; i++) {
+    if (i === idx) continue;
+    const sig = raw.subarray(sigStart + i * 64, sigStart + (i + 1) * 64);
+    if (sig.every((b) => b === 0)) continue;
+    if (!ed25519.verify(sig, message, signers[i])) {
+      throw new Error('v1: подпись плательщика Fomo не сходится с разобранным сообщением. Формат изменился, транзакцию не подписываю');
+    }
+  }
+  const out = Buffer.from(raw);
+  const sig = ed25519.sign(message, keypair.secretKey.subarray(0, 32));
+  Buffer.from(sig).copy(out, sigStart + idx * 64);
+  return out.toString('base64');
+}
+
 // Добавляет нашу подпись к транзакции, которая пришла от Fomo.
 export function signSwapTransaction(txBase64, keypair) {
   const raw = Buffer.from(txBase64, 'base64');
+  if (isV1(raw)) return signV1(raw, keypair);
 
   // Пробуем legacy формат, он тут и ожидается: размер около 924 байт
   try {
@@ -56,6 +99,7 @@ export function signSwapTransaction(txBase64, keypair) {
 // Список программ, которые вызывает транзакция. Нужен серверу, чтобы логировать и проверять белый список перед подписью.
 export function programIds(txBase64) {
   const raw = Buffer.from(txBase64, 'base64');
+  if (isV1(raw)) return ['v1-не-разобрано']; // инструкции v1 не разбираем: белый список для них не применим
   try {
     const tx = Transaction.from(raw);
     return [...new Set(tx.instructions.map((i) => i.programId.toBase58()))];

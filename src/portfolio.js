@@ -73,22 +73,51 @@ function usdOf(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-// PnL по кошельку: сколько потратил, сколько получил, сколько стоит сейчас
-export function pnlFor(wallet, journal, holdingsValueUsd) {
+// Реальные доллары сделки. Новые записи несут точную дельту USDC из ончейна (usd).
+// У старых покупок это сумма из поля amount ("$2"). У старых продаж суммы нет:
+// в amount там процент ("50%"), его нельзя считать долларами, поэтому такие продажи пропускаем.
+function tradeUsd(j) {
+  if (typeof j.usd === 'number') return j.usd;
+  if (j.side === 'buy') return usdOf(j.amount);
+  return null;
+}
+
+export function cachedPrice(mint) {
+  return prices.get(mint)?.usd ?? 0;
+}
+
+// PnL по кошельку: сколько потратил, сколько получил, сколько стоит сейчас.
+// tokens и priceMap нужны для Win rate: доля токенов, по которым итог в плюсе.
+export function pnlFor(wallet, journal, holdingsValueUsd, tokens = {}, priceMap = new Map()) {
   let spent = 0;
   let got = 0;
+  const per = new Map(); // mint -> { spent, got, sold }
   for (const j of journal) {
     if (!j || j.wallet !== wallet || !j.ok) continue;
-    if (j.side === 'buy') spent += usdOf(j.amount);
-    if (j.side === 'sell') got += usdOf(j.amount);
+    const usd = tradeUsd(j);
+    if (usd == null) continue;
+    const m = per.get(j.mint) || { spent: 0, got: 0 };
+    if (j.side === 'buy') { spent += usd; m.spent += usd; }
+    if (j.side === 'sell') { got += usd; m.got += usd; }
+    per.set(j.mint, m);
   }
   const total = got + holdingsValueUsd - spent;
+
+  let wins = 0;
+  let counted = 0;
+  for (const [mint, m] of per) {
+    if (m.spent <= 0) continue;
+    const held = Number(tokens[mint] || 0) * (priceMap.get(mint) || 0);
+    counted++;
+    if (m.got + held > m.spent) wins++;
+  }
   return {
     spent: +spent.toFixed(2),
     got: +got.toFixed(2),
     holdings: +holdingsValueUsd.toFixed(2),
     pnl: +total.toFixed(2),
     percent: spent > 0 ? +((total / spent) * 100).toFixed(1) : 0,
+    winrate: counted ? Math.round((wins / counted) * 100) : null,
   };
 }
 
@@ -97,7 +126,7 @@ export function portfolio(statsMap, journal, priceMap) {
   const out = new Map();
   for (const [name, s] of statsMap.entries()) {
     const value = holdingsUsd(s.tokens, priceMap);
-    out.set(name, { valueUsd: +value.toFixed(2), ...pnlFor(name, journal, value), tokens: s.tokens || {} });
+    out.set(name, { valueUsd: +value.toFixed(2), ...pnlFor(name, journal, value, s.tokens, priceMap), tokens: s.tokens || {} });
   }
   return out;
 }
@@ -107,4 +136,30 @@ export function heldMints(statsMap) {
   const set = new Set();
   for (const s of statsMap.values()) for (const m of Object.keys(s.tokens || {})) set.add(m);
   return [...set];
+}
+
+// Название, тикер, капитализация и ликвидность токена (Dexscreener, без обращения к Fomo)
+const metaCache = new Map();
+export async function tokenMeta(mint) {
+  const c = metaCache.get(mint);
+  if (c && Date.now() - c.at < 30_000) return c.v;
+  let v = { name: '', symbol: '', priceUsd: 0, marketCap: 0, liquidity: 0 };
+  try {
+    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(8000) });
+    if (res.ok) {
+      const body = await res.json();
+      const pairs = (body.pairs || []).filter((p) => p.baseToken?.address === mint);
+      pairs.sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0));
+      const p = pairs[0];
+      if (p) {
+        v = {
+          name: p.baseToken.name || '', symbol: p.baseToken.symbol || '',
+          priceUsd: Number(p.priceUsd || 0), marketCap: Number(p.marketCap || p.fdv || 0), liquidity: Number(p.liquidity?.usd || 0),
+        };
+        if (v.priceUsd) prices.set(mint, { usd: v.priceUsd, at: Date.now() });
+      }
+    }
+  } catch { /* источник недоступен: отдаём пустые поля, интерфейс покажет прочерк */ }
+  metaCache.set(mint, { at: Date.now(), v });
+  return v;
 }

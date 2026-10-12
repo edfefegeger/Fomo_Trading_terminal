@@ -1,7 +1,14 @@
 {
+  "name": "fomo-automate",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js"
+  },
   "dependencies": {
     "@solana/web3.js": "^1.99.0",
     "bs58": "^6.0.0",
-    "puppeteer-core": "^25.12.0"
+    "puppeteer-core": "^25.12.0",
+    "@noble/curves": "^1.9.7"
   }
 }

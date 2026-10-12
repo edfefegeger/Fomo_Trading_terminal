@@ -9,7 +9,7 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import { loadKeypair, signSwapTransaction, programIds } from './sign.js';
-import { getPrices, portfolio, heldMints } from './portfolio.js';
+import { getPrices, portfolio, heldMints, tokenMeta, cachedPrice } from './portfolio.js';
 
 const root = new URL('../', import.meta.url);
 const cfg = JSON.parse(fs.readFileSync(new URL('accounts.config.json', root), 'utf8'));
@@ -24,6 +24,9 @@ function saveConfig() {
   fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, CONFIG_PATH.pathname);
 }
+
+cfg.groups = Array.isArray(cfg.groups) ? cfg.groups : [];
+const GROUP_RE = /^[a-zA-Z0-9_-]{1,24}$/;
 
 const PORT = 8787;
 const HOST = `127.0.0.1:${PORT}`;
@@ -127,19 +130,18 @@ function refreshStats() {
       });
 
       // цены и стоимость позиций: публичный Dexscreener, Fomo не трогаем
+      // PnL считаем всегда: реализованная прибыль есть и когда токенов уже нет
       const mints = heldMints(stats);
-      if (mints.length) {
-        try {
-          const priceMap = await getPrices(mints);
-          for (const [name, pf] of portfolio(stats, journal, priceMap)) {
-            stats.set(name, {
-              ...(stats.get(name) || {}),
-              valueUsd: pf.valueUsd, pnl: pf.pnl, pnlPercent: pf.percent, invested: pf.spent,
-            });
-          }
-        } catch (e) {
-          log('[prices] ошибка, оставляю прошлые цены:', e.message);
+      try {
+        const priceMap = mints.length ? await getPrices(mints) : new Map();
+        for (const [name, pf] of portfolio(stats, journal, priceMap)) {
+          stats.set(name, {
+            ...(stats.get(name) || {}),
+            valueUsd: pf.valueUsd, pnl: pf.pnl, pnlPercent: pf.percent, invested: pf.spent, winrate: pf.winrate,
+          });
         }
+      } catch (e) {
+        log('[prices] ошибка, оставляю прошлые цены:', e.message);
       }
     } catch (e) {
       for (const n of names) stats.set(n, { ...(stats.get(n) || {}), error: e.message });
@@ -183,6 +185,24 @@ async function confirm(r) {
   r.status = 'pending';
 }
 
+// Реальная дельта USDC и токена по подписи: честный PnL, supply и сумма продажи берутся отсюда
+async function fillDeltas(r, row, address, mint) {
+  for (let i = 0; i < 4; i++) {
+    try {
+      const t = await rpc1('getTransaction', [r.sig, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' }]);
+      if (!t?.meta) { await sleep(1200); continue; }
+      const sum = (arr, m) => (arr || []).filter((b) => b.owner === address && b.mint === m)
+        .reduce((acc, b) => ({ amt: acc.amt + Number(b.uiTokenAmount.amount), dec: b.uiTokenAmount.decimals }), { amt: 0, dec: 0 });
+      const dUsdc = sum(t.meta.postTokenBalances, USDC).amt - sum(t.meta.preTokenBalances, USDC).amt;
+      const post = sum(t.meta.postTokenBalances, mint);
+      const dTok = post.amt - sum(t.meta.preTokenBalances, mint).amt;
+      row.usd = +(Math.abs(dUsdc) / 1e6).toFixed(4);
+      row.qty = +(Math.abs(dTok) / 10 ** (post.dec || (await tokenInfo(mint)).decimals)).toFixed(6);
+      return;
+    } catch { await sleep(1200); }
+  }
+}
+
 // ---------- сделки ----------
 let running = 0;
 const waitq = [];
@@ -220,20 +240,24 @@ async function one(a, p) {
       if (amount <= 0n) throw new Error('нет баланса этого токена');
       row.amount = p.percent + '%';
     }
-    const [lo, hi] = cfg.jitterMs || [0, 0];
-    if (hi > 0) await sleep(lo + Math.random() * (hi - lo));
+    const [lo, hiCfg] = cfg.jitterMs || [0, 0];
+    const hi = p.jitterMax != null ? Math.min(Math.max(Number(p.jitterMax) || 0, 0), 10000) : hiCfg;
+    if (hi > 0) await sleep(Math.min(lo, hi) + Math.random() * (hi - Math.min(lo, hi)));
     r = await dispatch(a, { id: p.jobId, direction: p.direction, tokenId: p.tokenId, amount: String(amount) });
-    if (r.ok && r.sig) await confirm(r);
+    if (r.ok && r.sig) {
+      await confirm(r);
+      if (r.ok && r.status !== 'pending') await fillDeltas(r, row, a.address, p.mint);
+    }
   } catch (e) {
     r = { ok: false, error: e.message };
   }
   Object.assign(row, { ok: !!r.ok, sig: r.sig, status: r.status, error: r.error });
   if (!r.ok) row.side = 'error';
   record(row);
-  return { name: a.name, ...r, usdValue: p.direction === 'buy' && r.ok ? Number(row.amount.slice(1)) : undefined };
+  return { name: a.name, ...r, usdValue: p.direction === 'buy' && r.ok ? (row.usd ?? Number(row.amount.slice(1))) : undefined };
 }
 
-async function runAll({ direction, tokenId, usd, percent, accounts }) {
+async function runAll({ direction, tokenId, usd, percent, accounts, jitterMax }) {
   if (!['buy', 'sell'].includes(direction)) throw new Error('direction: buy или sell');
   const [mint, chain] = String(tokenId || '').split(':');
   if (!MINT_RE.test(mint || '') || chain !== CHAIN) throw new Error(`tokenId должен быть <mint>:${CHAIN}`);
@@ -254,7 +278,7 @@ async function runAll({ direction, tokenId, usd, percent, accounts }) {
     const out = await Promise.all(
       accounts.map(async (name) => {
         await acquire();
-        try { return await one(accs.get(name), { jobId, direction, mint, tokenId, usd, percent: pct }); } finally { release(); }
+        try { return await one(accs.get(name), { jobId, direction, mint, tokenId, usd, percent: pct, jitterMax }); } finally { release(); }
       }),
     );
     setTimeout(() => refreshStats().catch(() => {}), 1500);
@@ -263,6 +287,134 @@ async function runAll({ direction, tokenId, usd, percent, accounts }) {
     inflight.delete(lock);
   }
 }
+
+// ---------- автоматизации (tasks) ----------
+// Buy:  каждые N секунд покупка на случайную сумму из диапазона (USDC) на выбранных кошельках.
+// Sell: цена берётся с Dexscreener; при каждом росте на X% от точки отсчёта продаём Y% баланса, точка отсчёта сдвигается.
+// Работают на сервере, вкладку терминала держать открытой не нужно. После перезапуска сервера все задачи остановлены.
+const TASKS_PATH = new URL('data/tasks.json', root);
+const MAX_TASKS = 2;
+const SELL_CHECK_MS = 20000;
+const tasks = new Map();
+const timers = new Map();
+let taskSeq = 0;
+try {
+  for (const t of JSON.parse(fs.readFileSync(TASKS_PATH, 'utf8'))) { tasks.set(t.id, { ...t, running: false }); taskSeq = Math.max(taskSeq, t.id); }
+} catch { /* файла ещё нет */ }
+function saveTasks() { fs.writeFile(TASKS_PATH, JSON.stringify([...tasks.values()], null, 2), () => {}); }
+const publicTask = (t) => ({ ...t });
+
+function stopTask(t, why) {
+  t.running = false;
+  if (why) t.lastError = why;
+  clearTimeout(timers.get(t.id)); timers.delete(t.id);
+  saveTasks();
+}
+
+async function tickTask(id) {
+  const t = tasks.get(id);
+  if (!t || !t.running) return;
+  let delay = t.side === 'buy' ? t.everySec * 1000 : SELL_CHECK_MS;
+  try {
+    const names = t.accounts.filter((n) => accs.has(n));
+    if (!names.length) return stopTask(t, 'в задаче не осталось кошельков');
+    let rows = null;
+    if (t.side === 'buy') {
+      const usd = Math.round((t.usdMin + Math.random() * (t.usdMax - t.usdMin)) * 100) / 100;
+      rows = await runAll({ direction: 'buy', tokenId: t.mint + ':' + CHAIN, usd: String(Math.round(usd * 1e6)), accounts: names });
+      t.runs++;
+    } else {
+      const price = (await getPrices([t.mint])).get(t.mint) || 0;
+      if (price > 0) {
+        if (!t.basePrice) t.basePrice = price;
+        if (price >= t.basePrice * (1 + t.stepPct / 100)) {
+          t.lastTrigger = price;
+          rows = await runAll({ direction: 'sell', tokenId: t.mint + ':' + CHAIN, percent: t.percent, accounts: names });
+          t.basePrice = price;
+          t.runs++;
+        }
+      }
+    }
+    if (rows) {
+      const bad = rows.filter((r) => !r.ok);
+      t.lastRunAt = Date.now();
+      t.lastError = bad.length ? bad.map((r) => `${r.name}: ${r.error}`).join('; ').slice(0, 300) : '';
+      t.failStreak = bad.length === rows.length ? (t.failStreak || 0) + 1 : 0;
+      if (t.failStreak >= 3) return stopTask(t, 'остановлена: 3 раза подряд все сделки с ошибкой. ' + t.lastError);
+    }
+    if (t.maxRuns && t.runs >= t.maxRuns) return stopTask(t, 'выполнен лимит запусков (' + t.maxRuns + ')');
+  } catch (e) {
+    // "уже выполняется" не считаем ошибкой задачи: просто ждём следующего тика
+    t.lastError = e.message;
+    if (!/уже выполняется/.test(e.message)) t.failStreak = (t.failStreak || 0) + 1;
+    if (t.failStreak >= 3) return stopTask(t, 'остановлена: ' + e.message);
+  }
+  saveTasks();
+  if (t.running) timers.set(id, setTimeout(() => tickTask(id), delay));
+}
+
+function startTask(t) {
+  t.running = true; t.failStreak = 0; t.lastError = ''; t.basePrice = 0; t.runs = 0;
+  clearTimeout(timers.get(t.id));
+  timers.set(t.id, setTimeout(() => tickTask(t.id), 300));
+  saveTasks();
+  log('[task] запущена', t.id, t.side, t.mint);
+}
+
+function createTask(b) {
+  if (tasks.size >= MAX_TASKS) throw new Error('максимум задач: ' + MAX_TASKS);
+  const side = b.side === 'sell' ? 'sell' : 'buy';
+  const mint = String(b.mint || '').split(':')[0];
+  if (!MINT_RE.test(mint)) throw new Error('у проекта нет настоящего mint');
+  const names = [...new Set(Array.isArray(b.accounts) ? b.accounts : [])];
+  if (!names.length) throw new Error('выбери кошельки в списке справа');
+  const unknown = names.filter((n) => !accs.has(n));
+  if (unknown.length) throw new Error('неизвестные кошельки: ' + unknown.join(', '));
+  const t = { id: ++taskSeq, side, mint, ticker: String(b.ticker || mint.slice(0, 6)).slice(0, 12), accounts: names, running: false, runs: 0, createdAt: Date.now(), lastError: '' };
+  const num = (v) => Number(String(v ?? '').replace(',', '.').replace(/[^\d.]/g, ''));
+  if (side === 'buy') {
+    t.usdMin = num(b.usdMin); t.usdMax = num(b.usdMax); t.everySec = Math.round(num(b.everySec));
+    if (!(t.usdMin > 0) || !(t.usdMax >= t.usdMin)) throw new Error('сумма: "От" больше нуля, "До" не меньше "От"');
+    if (t.usdMax * 1e6 > MAX_USD) throw new Error(`сумма вне лимита (maxUsdPerTrade = $${MAX_USD / 1e6})`);
+    if (!(t.everySec >= 3)) throw new Error('частота: не чаще раза в 3 секунды');
+    t.maxRuns = Math.max(0, Math.round(num(b.maxRuns || 0)));
+  } else {
+    t.percent = num(b.percent); t.stepPct = num(b.stepPct);
+    if (!(t.percent > 0 && t.percent <= 100)) throw new Error('процент продажи 1-100');
+    if (!(t.stepPct > 0)) throw new Error('шаг роста должен быть больше нуля');
+    t.maxRuns = Math.max(0, Math.round(num(b.maxRuns || 0)));
+  }
+  tasks.set(t.id, t);
+  saveTasks();
+  return t;
+}
+
+// ---------- обогащение журнала: supply и PnL каждой сделки ----------
+async function enrichedJournal(limit) {
+  const rows = journal.map((j) => ({ ...j }));
+  const bought = new Map(); // wallet:mint -> { usd, qty } средняя цена входа по ходу журнала
+  for (const j of rows) {
+    if (!j.ok || j.qty == null || j.usd == null) continue;
+    const k = j.wallet + ':' + j.mint;
+    const b = bought.get(k) || { usd: 0, qty: 0 };
+    if (j.side === 'buy') {
+      b.usd += j.usd; b.qty += j.qty; bought.set(k, b);
+      const price = cachedPrice(j.mint);
+      if (price > 0 && j.usd > 0) j.pnlPct = +(((j.qty * price) / j.usd - 1) * 100).toFixed(1);
+    } else if (j.side === 'sell' && b.qty > 0 && j.qty > 0) {
+      const avg = b.usd / b.qty;
+      j.pnlPct = +((j.usd / j.qty / avg - 1) * 100).toFixed(1);
+    }
+  }
+  const out = rows.slice(-limit).reverse();
+  for (const j of out) {
+    if (j.qty == null || !j.mint) continue;
+    try { const t = await tokenInfo(j.mint); if (t.supply > 0) j.supplyPct = Number(((j.qty / t.supply) * 100).toPrecision(3)); } catch { /* mint не найден */ }
+  }
+  return out;
+}
+
+const groupList = () => ['all', ...new Set([...cfg.groups, ...[...accs.values()].map((a) => a.group).filter((g) => g && g !== 'all')])];
 
 // ---------- http ----------
 async function readJson(req) {
@@ -286,6 +438,8 @@ http
       const url = new URL(req.url, `http://${HOST}`);
       const origin = req.headers.origin;
 
+      if (url.pathname === '/favicon.ico') { res.statusCode = 204; return res.end(); }
+
       // --- терминал ---
       if (req.method === 'GET' && url.pathname === '/') {
         return send(res, 200, fs.readFileSync(new URL('public/terminal.html', root), 'utf8'), 'text/html');
@@ -299,7 +453,7 @@ http
           const s = stats.get(a.name) || {};
           return {
             id: i + 1, name: a.name, address: a.address, group: a.group || 'all', online: online(a.name),
-            sol: s.sol ?? 0, usdc: s.usdc ?? 0, tokens: s.tokens || {}, trades: trades[a.name] || 0,
+            sol: s.sol ?? 0, usdc: s.usdc ?? 0, tokens: s.tokens || {}, trades: trades[a.name] || 0, winrate: s.winrate ?? null,
             pnl: s.pnl ?? 0, pnlPercent: s.pnlPercent ?? 0, valueUsd: s.valueUsd ?? 0, invested: s.invested ?? 0,
             statsAt: s.at || null, statsError: s.error || null,
           };
@@ -309,12 +463,16 @@ http
         return send(res, 200, [...accs.keys()].map((name) => ({ name, online: online(name) })));
       }
       if (req.method === 'GET' && url.pathname === '/transactions') {
-        return send(res, 200, journal.slice(-200).reverse());
+        return send(res, 200, await enrichedJournal(200));
       }
       if (req.method === 'GET' && url.pathname === '/token') {
         const mint = url.searchParams.get('mint') || '';
         if (!MINT_RE.test(mint)) return send(res, 400, { error: 'mint' });
-        try { return send(res, 200, await tokenInfo(mint)); } catch (e) { return send(res, 404, { error: e.message }); }
+        try {
+          const [info, meta] = await Promise.all([tokenInfo(mint), tokenMeta(mint)]);
+          const holders = [...stats.values()].filter((s) => (s.tokens?.[mint] || 0) > 0).length;
+          return send(res, 200, { ...info, ...meta, holders });
+        } catch (e) { return send(res, 404, { error: e.message }); }
       }
       if (req.method === 'POST' && url.pathname === '/trade') {
         // только со своей страницы: свой заголовок и свой origin
@@ -335,16 +493,20 @@ http
         const { name, address, secret, group } = await readJson(req);
         if (!/^[a-zA-Z0-9_-]{2,24}$/.test(String(name || ''))) return send(res, 400, { error: 'имя: 2-24 символа, буквы, цифры, дефис' });
         if (accs.has(name)) return send(res, 400, { error: 'такое имя уже занято' });
-        if (!MINT_RE.test(String(address || ''))) return send(res, 400, { error: 'адрес не похож на solana' });
-        if (!/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(String(secret || ''))) return send(res, 400, { error: 'ключ должен быть base58, 64 байта' });
+        const grp = String(group || 'all').trim() || 'all';
+        if (!GROUP_RE.test(grp)) return send(res, 400, { error: 'группа: буквы, цифры, дефис' });
+        const sec = String(secret || '').trim();
+        if (!/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(sec) && !/^\[[\d,\s]+\]$/.test(sec)) return send(res, 400, { error: 'ключ: base58 (64 байта) или JSON-массив байтов' });
         let kp;
-        try { kp = loadKeypair(secret); } catch (e) { return send(res, 400, { error: 'ключ не разбирается: ' + e.message }); }
-        if (kp.publicKey.toBase58() !== address) return send(res, 400, { error: 'ключ не от этого адреса' });
-        cfg.accounts.push({ id: (cfg.accounts.at(-1)?.id || 0) + 1, name, address, group: group || 'all', secret, usd: cfg.defaultUsd });
+        try { kp = loadKeypair(sec); } catch (e) { return send(res, 400, { error: 'ключ не разбирается: ' + e.message }); }
+        const addr = kp.publicKey.toBase58();
+        if (address && String(address).trim() !== addr) return send(res, 400, { error: 'ключ не от этого адреса' });
+        if ([...accs.values()].some((x) => x.address === addr)) return send(res, 400, { error: 'этот кошелёк уже добавлен' });
+        cfg.accounts.push({ name, address: addr, group: grp, secret: sec, usd: cfg.defaultUsd });
         saveConfig();
-        accs.set(name, { name, usd: cfg.defaultUsd, group: group || 'all', kp, address });
+        accs.set(name, { name, usd: cfg.defaultUsd, group: grp, kp, address: addr });
         log('[accounts] добавлен', name);
-        return send(res, 200, { ok: true, name });
+        return send(res, 200, { ok: true, name, address: addr });
       }
       if (req.method === 'PATCH' && url.pathname === '/accounts') {
         if (!panelOk) return send(res, 403, { error: 'forbidden' });
@@ -352,11 +514,21 @@ http
         const a = accs.get(name);
         if (!a) return send(res, 404, { error: 'нет такого кошелька' });
         const c = cfg.accounts.find((x) => x.name === name);
-        if (group) { a.group = group; if (c) c.group = group; }
-        if (newName && newName !== name && !accs.has(newName)) {
+        if (group) {
+          if (!GROUP_RE.test(String(group))) return send(res, 400, { error: 'группа: буквы, цифры, дефис' });
+          a.group = group; if (c) c.group = group;
+        }
+        if (newName && newName !== name) {
+          if (!/^[a-zA-Z0-9_-]{2,24}$/.test(String(newName))) return send(res, 400, { error: 'имя: 2-24 символа, буквы, цифры, дефис' });
+          if (accs.has(newName)) return send(res, 400, { error: 'такое имя уже занято' });
           if (c) c.name = newName;
-          accs.delete(name);
-          accs.set(newName, { ...a, name: newName });
+          const entries = [...accs.entries()].map(([k, v]) => (k === name ? [newName, { ...v, name: newName }] : [k, v]));
+          accs.clear();
+          for (const [k, v] of entries) accs.set(k, v);
+          const st = stats.get(name); if (st) { stats.delete(name); stats.set(newName, st); }
+          for (const j of journal) if (j.wallet === name) j.wallet = newName; // история остаётся за кошельком
+          for (const t of tasks.values()) t.accounts = t.accounts.map((n) => (n === name ? newName : n));
+          fs.writeFileSync(JOURNAL, journal.map((j) => JSON.stringify(j)).join('\n') + (journal.length ? '\n' : ''));
         }
         saveConfig();
         return send(res, 200, { ok: true });
@@ -369,9 +541,51 @@ http
         cfg.accounts.splice(i, 1);
         accs.delete(name);
         stats.delete(name);
+        queue.delete(name); grants.delete(name);
+        for (const t of tasks.values()) t.accounts = t.accounts.filter((n) => n !== name);
         saveConfig();
         log('[accounts] удалён', name);
         return send(res, 200, { ok: true });
+      }
+
+      if (req.method === 'GET' && url.pathname === '/groups') {
+        return send(res, 200, groupList().map((g) => ({ name: g, count: g === 'all' ? accs.size : [...accs.values()].filter((a) => a.group === g).length })));
+      }
+      if (req.method === 'POST' && url.pathname === '/groups') {
+        if (!panelOk) return send(res, 403, { error: 'forbidden' });
+        const name = String((await readJson(req)).name || '').trim().toLowerCase();
+        if (!GROUP_RE.test(name)) return send(res, 400, { error: 'группа: буквы, цифры, дефис' });
+        if (groupList().includes(name)) return send(res, 400, { error: 'такая группа уже есть' });
+        cfg.groups.push(name);
+        saveConfig();
+        return send(res, 200, { ok: true });
+      }
+      if (req.method === 'DELETE' && url.pathname === '/groups') {
+        if (!panelOk) return send(res, 403, { error: 'forbidden' });
+        const name = url.searchParams.get('name');
+        if (!name || name === 'all') return send(res, 400, { error: 'группу all удалить нельзя' });
+        cfg.groups = cfg.groups.filter((g) => g !== name);
+        for (const a of accs.values()) if (a.group === name) { a.group = 'all'; const c = cfg.accounts.find((x) => x.name === a.name); if (c) c.group = 'all'; }
+        saveConfig();
+        return send(res, 200, { ok: true });
+      }
+
+      if (req.method === 'GET' && url.pathname === '/tasks') return send(res, 200, [...tasks.values()].map(publicTask));
+      if (url.pathname.startsWith('/tasks') && req.method !== 'GET') {
+        if (!panelOk) return send(res, 403, { error: 'forbidden' });
+        try {
+          if (req.method === 'POST' && url.pathname === '/tasks') return send(res, 200, publicTask(createTask(await readJson(req))));
+          const t = tasks.get(Number(url.searchParams.get('id')));
+          if (!t) return send(res, 404, { error: 'нет такой задачи' });
+          if (req.method === 'POST' && url.pathname === '/tasks/start') {
+            if (t.running) return send(res, 200, publicTask(t));
+            if (!t.accounts.length) return send(res, 400, { error: 'в задаче нет кошельков' });
+            startTask(t); return send(res, 200, publicTask(t));
+          }
+          if (req.method === 'POST' && url.pathname === '/tasks/stop') { stopTask(t); return send(res, 200, publicTask(t)); }
+          if (req.method === 'DELETE' && url.pathname === '/tasks') { stopTask(t); tasks.delete(t.id); saveTasks(); return send(res, 200, { ok: true }); }
+        } catch (e) { return send(res, 400, { error: e.message }); }
+        return send(res, 404, { error: 'not found' });
       }
 
       // --- агент: токен обязателен всегда. Origin fomo.family НЕ считается аутентификацией ---

@@ -1109,33 +1109,33 @@
         <form class="login-form" id="loginForm">
           <div class="field">
             <label for="login">Логин</label>
-            <input id="login" autocomplete="username" value="trader@desk.io">
+            <input id="login" autocomplete="username" value="trader" placeholder="любой логин">
           </div>
           <div class="field">
             <label for="password">Пароль</label>
-            <input id="password" type="password" autocomplete="current-password" value="demo-pass">
+            <input id="password" type="password" autocomplete="current-password" value="" placeholder="любой пароль">
           </div>
           <button class="btn btn-primary" type="submit">Войти</button>
         </form>
       </div>
       <div class="login-market">
         <div>
-          <span class="pill"><span class="dot"></span> Live demo data</span>
-          <h2 style="margin-top:14px;font-size:28px;">Рабочий фронт без бэкенда</h2>
-          <p class="muted" style="margin-top:8px;">Все данные, сделки, ошибки и стратегии имитируются в браузере.</p>
+          <span class="pill"><span class="dot"></span> Live</span>
+          <h2 style="margin-top:14px;font-size:28px;">Живые данные с вашего сервера</h2>
+          <p class="muted" style="margin-top:8px;">Балансы, сделки и PnL читаются из блокчейна через ваш RPC. Пароль для входа — любой.</p>
         </div>
         <div class="market-strip">
           <div class="mini-tile">
-            <span class="label">PNL Today</span>
-            <strong class="positive" style="display:block;margin-top:8px;font-size:24px;">+18.4%</strong>
+            <span class="label">PnL</span>
+            <strong id="loginPnl" class="muted" style="display:block;margin-top:8px;font-size:24px;">—</strong>
           </div>
           <div class="mini-tile">
             <span class="label">Wallets</span>
-            <strong style="display:block;margin-top:8px;font-size:24px;">12 / 100</strong>
+            <strong id="loginWallets" style="display:block;margin-top:8px;font-size:24px;">—</strong>
           </div>
           <div class="mini-tile">
             <span class="label">Errors</span>
-            <strong class="negative" style="display:block;margin-top:8px;font-size:24px;">3</strong>
+            <strong id="loginErrors" class="muted" style="display:block;margin-top:8px;font-size:24px;">—</strong>
           </div>
         </div>
         <div class="panel panel-pad">
@@ -1200,6 +1200,14 @@
                   <button class="btn btn-danger" data-action="delete-wallet">Удалить</button>
                 </div>
                 <div class="panel-pad">
+                  <div class="wallet-edit" style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:14px">
+                    <div class="field" style="min-width:140px"><label for="walletGroupSelect">Группа</label>
+                      <select id="walletGroupSelect"></select></div>
+                    <div class="field" style="min-width:160px"><label for="walletRenameInput">Имя</label>
+                      <input id="walletRenameInput" maxlength="24"></div>
+                    <button class="btn" id="walletRenameBtn">Сохранить</button>
+                    <button class="btn" id="walletCopyBtn" title="Скопировать адрес">Копировать адрес</button>
+                  </div>
                   <div class="metric-grid">
                     <div class="metric"><span class="label">Баланс</span><b id="walletBalance">0 SOL</b></div>
                     <div class="metric"><span class="label">PNL</span><b id="walletPnl">0%</b></div>
@@ -1299,20 +1307,20 @@
 
                 <div class="filters">
                   <div class="field">
-                    <label for="slippage">Slippage</label>
+                    <label for="slippage">Разброс задержки между кошельками</label>
                     <select id="slippage">
-                      <option>Auto</option>
-                      <option>3%</option>
-                      <option>5%</option>
-                      <option>10%</option>
+                      <option value="0">Нет (одновременно)</option>
+                      <option value="500">до 0.5 с</option>
+                      <option value="1500" selected>до 1.5 с</option>
+                      <option value="3000">до 3 с</option>
+                      <option value="8000">до 8 с</option>
                     </select>
                   </div>
                   <div class="field">
-                    <label for="priorityFee">Priority fee</label>
+                    <label for="priorityFee">Подтверждение сделки</label>
                     <select id="priorityFee">
-                      <option>0.002 SOL</option>
-                      <option>0.005 SOL</option>
-                      <option>0.01 SOL</option>
+                      <option value="1" selected>Спрашивать</option>
+                      <option value="0">Без вопросов</option>
                     </select>
                   </div>
                 </div>
@@ -1322,21 +1330,6 @@
             </div>
 
             <div class="grid right-terminal-column">
-
-              <div class="panel" id="addWalletPanel">
-                <div class="section-head"><div><h3>Добавить кошелёк</h3></div></div>
-                <div class="panel-pad" style="display:grid;gap:8px">
-                  <input id="awName" placeholder="имя, например acc4" style="padding:8px">
-                  <input id="awGroup" placeholder="группа, например main" style="padding:8px">
-                  <input id="awAddress" placeholder="солановский адрес" style="padding:8px">
-                  <input id="awSecret" type="password" placeholder="приватный ключ base58" style="padding:8px">
-                  <div style="display:flex;gap:8px">
-                    <button class="btn btn-primary" id="awSave">Сохранить</button>
-                    <button class="btn" id="awReload">Обновить</button>
-                  </div>
-                  <div id="awStatus" style="font-size:12px;opacity:.75"></div>
-                </div>
-              </div>
 
               <div class="panel" data-region="terminal-wallet-selector">
                 <div class="section-head">
@@ -1379,23 +1372,24 @@
       <div class="section-head">
         <div>
           <h3>Добавить кошелек</h3>
-          <p class="muted">Название, приватник и сессия FOMO</p>
+          <p class="muted">Название, группа и приватный ключ. Адрес определится сам</p>
         </div>
         <button class="btn btn-icon" data-action="close-wallet-modal" aria-label="Закрыть">×</button>
       </div>
       <div class="panel-pad form-stack">
         <div class="field">
           <label for="walletNameInput">Название кошелька</label>
-          <input id="walletNameInput" value="Wallet 07">
+          <input id="walletNameInput" placeholder="например acc4" maxlength="24">
         </div>
         <div class="field">
-          <label for="walletPrivateKeyInput">Приватник</label>
-          <input id="walletPrivateKeyInput" type="password" value="" placeholder="через браузер не вводится">
+          <label for="walletGroupInput">Группа</label>
+          <select id="walletGroupInput"></select>
         </div>
         <div class="field">
-          <label for="walletFomoSessionInput">Сессия FOMO</label>
-          <input id="walletFomoSessionInput" value="" placeholder="не нужна: сессию держит агент">
+          <label for="walletPrivateKeyInput">Приватный ключ</label>
+          <input id="walletPrivateKeyInput" type="password" autocomplete="off" placeholder="base58 или [1,2,3,...]">
         </div>
+        <div class="muted" id="walletModalStatus" style="font-size:12px;min-height:16px"></div>
         <button class="btn btn-primary" data-action="create-wallet">Создать кошелек</button>
       </div>
     </div>
@@ -1413,11 +1407,11 @@
       <div class="panel-pad form-stack">
         <div class="field">
           <label for="projectNameInput">Название проекта</label>
-          <input id="projectNameInput" value="Momentum">
+          <input id="projectNameInput" placeholder="можно пусто: подтянется само">
         </div>
         <div class="field">
           <label for="projectMintInput">Адрес mint</label>
-          <input id="projectMintInput" value="MintDemo111111111111111111111111111111111">
+          <input id="projectMintInput" placeholder="адрес токена Solana">
         </div>
         <button class="btn btn-primary" data-action="create-project">Создать проект</button>
       </div>
@@ -1461,12 +1455,12 @@
           <div class="label">Покупки</div>
           <div class="grid grid-3">
             <div class="field">
-              <label for="taskAmountMin">От</label>
-              <input id="taskAmountMin" value="0.08 SOL">
+              <label for="taskAmountMin">От, USDC</label>
+              <input id="taskAmountMin" value="1">
             </div>
             <div class="field">
-              <label for="taskAmountMax">До</label>
-              <input id="taskAmountMax" value="0.35 SOL">
+              <label for="taskAmountMax">До, USDC</label>
+              <input id="taskAmountMax" value="2">
             </div>
             <div class="field">
               <label for="taskEvery">Частота, сек.</label>
@@ -1479,14 +1473,20 @@
           <div class="grid grid-2">
             <div class="field">
               <label for="taskSellPercent">% продажи от баланса</label>
-              <input id="taskSellPercent" value="18%">
+              <input id="taskSellPercent" value="25%">
             </div>
             <div class="field">
-              <label for="taskSellFrequency">Частота, каждые % роста</label>
-              <input id="taskSellFrequency" value="22%">
+              <label for="taskSellFrequency">Каждые +% роста цены</label>
+              <input id="taskSellFrequency" value="20%">
             </div>
           </div>
         </div>
+        <div class="field">
+          <label for="taskMaxRuns">Лимит запусков (0 = без лимита)</label>
+          <input id="taskMaxRuns" value="20">
+        </div>
+        <div class="muted" style="font-size:12px">Задача работает на сервере для кошельков, отмеченных в списке «Выбор кошельков» в момент создания.</div>
+        <div class="muted" id="taskModalStatus" style="font-size:12px;min-height:16px"></div>
         <button class="btn btn-primary" data-action="create-task">Создать task</button>
       </div>
     </div>
@@ -1567,14 +1567,19 @@
       terminal: "Добавление проектов, торговые действия, фильтры, транзакции и ошибки.",
     };
 
-    document.getElementById("loginForm").addEventListener("submit", (event) => {
-      event.preventDefault();
+    function enterApp() {
       els.loginScreen.classList.add("hidden");
       els.app.classList.add("active");
       render();
+    }
+    document.getElementById("loginForm").addEventListener("submit", (event) => {
+      event.preventDefault(); // пароль может быть любым, в том числе пустым
+      try { sessionStorage.setItem("terminal.auth", "1"); } catch {}
+      enterApp();
     });
 
     document.getElementById("logout").addEventListener("click", () => {
+      try { sessionStorage.removeItem("terminal.auth"); } catch {}
       els.app.classList.remove("active");
       els.loginScreen.classList.remove("hidden");
     });
@@ -1593,56 +1598,11 @@
       if (event.target === els.walletModal) closeWalletModal();
     });
 
-    document.querySelector("[data-action='create-wallet']").addEventListener("click", () => {
-      if (state.wallets.length >= 100) return;
-      const id = Math.max(...state.wallets.map((wallet) => wallet.id)) + 1;
-      const name = document.getElementById("walletNameInput").value.trim() || `Wallet ${String(id).padStart(2, "0")}`;
-      const session = document.getElementById("walletFomoSessionInput").value.trim() || `fomo-session-${id}`;
-      state.wallets.push({
-        id,
-        name,
-        address: `${randomSegment()}...${randomSegment()}`,
-        session,
-        group: state.walletGroups.includes("snipers") ? "snipers" : id % 2 === 0 ? "risk" : "alpha",
-        balance: Number((12 + Math.random() * 42).toFixed(1)),
-        usdc: Math.floor(3000 + Math.random() * 18000),
-        tokens: Math.floor(2000000 + Math.random() * 24000000),
-        pnl: Number((-6 + Math.random() * 28).toFixed(1)),
-        trades: Math.floor(6 + Math.random() * 35),
-        winrate: Math.floor(42 + Math.random() * 30),
-      });
-      state.activeWalletId = id;
-      closeWalletModal();
-      render();
-    });
-
-    document.querySelector("[data-action='delete-wallet']").addEventListener("click", () => {
-      if (state.wallets.length <= 1) return;
-      state.wallets = state.wallets.filter((wallet) => wallet.id !== state.activeWalletId);
-      state.activeWalletId = state.wallets[0].id;
-      render();
-    });
-
     document.querySelector("[data-action='open-project-modal']").addEventListener("click", openProjectModal);
 
     document.querySelector("[data-action='close-project-modal']").addEventListener("click", closeProjectModal);
     els.projectModal.addEventListener("click", (event) => {
       if (event.target === els.projectModal) closeProjectModal();
-    });
-
-    document.querySelector("[data-action='create-project']").addEventListener("click", () => {
-      const mint = document.getElementById("projectMintInput").value.trim().split(":")[0];
-      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) { alert("Нужен настоящий адрес mint токена Solana (32–44 символа)"); return; }
-      if (state.projects.some((project) => project.mint === mint)) { alert("Такой проект уже добавлен"); return; }
-      const id = Math.max(0, ...state.projects.map((project) => project.id)) + 1;
-      const name = document.getElementById("projectNameInput").value.trim().replace(/[<>&"']/g, "") || mint.slice(0, 6);
-      const ticker = "$" + name.replace(/^\$/, "").slice(0, 8).toUpperCase();
-      state.projects = state.projects.filter((project) => project.mint); // убираем заглушку
-      state.projects.unshift({ id, ticker, name, mint, cap: "—", holders: "—", liquidity: "—", supply: "—", supplyRaw: 0, tax: "—", age: "—" });
-      state.activeProjectId = id;
-      if (window.loadProjectToken) setTimeout(window.loadProjectToken, 0);
-      closeProjectModal();
-      render();
     });
 
     document.querySelectorAll("[data-side]").forEach((button) => {
@@ -1658,14 +1618,6 @@
       });
     });
 
-    document.querySelectorAll("[data-group]").forEach((button) => {
-      button.addEventListener("click", () => {
-        document.querySelectorAll("#walletChecks input").forEach((input) => {
-          input.checked = button.dataset.group === "all" || input.dataset.group === button.dataset.group;
-        });
-      });
-    });
-
     document.querySelector("[data-action='toggle-project-rail']").addEventListener("click", () => {
       state.projectsCollapsed = !state.projectsCollapsed;
       renderProjectRail();
@@ -1675,17 +1627,6 @@
     document.querySelector("[data-action='close-group-modal']").addEventListener("click", closeGroupModal);
     els.groupModal.addEventListener("click", (event) => {
       if (event.target === els.groupModal) closeGroupModal();
-    });
-
-    document.querySelector("[data-action='create-wallet-group']").addEventListener("click", () => {
-      const input = document.getElementById("walletGroupName");
-      const value = input.value.trim().toLowerCase();
-      if (!value || state.walletGroups.includes(value)) return;
-      state.walletGroups.push(value);
-      input.value = "";
-      closeGroupModal();
-      renderWalletGroups();
-      renderWalletChecks();
     });
 
     document.querySelector("[data-action='open-task-modal']").addEventListener("click", openTaskModal);
@@ -1702,78 +1643,12 @@
       });
     });
 
-    document.querySelector("[data-action='create-task']").addEventListener("click", () => {
-      if (state.terminalTasks.length >= MAX_TERMINAL_TASKS) return;
-      const task = {
-        id: state.nextTaskId++,
-        side: state.taskSide,
-        running: false,
-        project: activeProject().ticker,
-      };
-      if (state.taskSide === "buy") {
-        task.range = `${document.getElementById("taskAmountMin").value}–${document.getElementById("taskAmountMax").value}`;
-        task.frequency = `${document.getElementById("taskEvery").value} сек.`;
-      } else {
-        task.percent = document.getElementById("taskSellPercent").value;
-        task.frequency = document.getElementById("taskSellFrequency").value;
-      }
-      state.terminalTasks.push(task);
-      closeTaskModal();
-      renderTaskControls();
-    });
-
     document.addEventListener("click", (event) => {
       const action = event.target.closest("[data-action]")?.dataset.action;
       if (action === "open-task-modal") openTaskModal();
       if (action === "open-wallet-modal") openWalletModal();
       if (action === "open-project-modal") openProjectModal();
       if (action === "open-group-modal") openGroupModal();
-    });
-
-    document.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-action='delete-wallet-group']");
-      if (!button) return;
-      const group = button.dataset.group;
-      if (group === "all") return;
-      state.walletGroups = state.walletGroups.filter((item) => item !== group);
-      state.wallets = state.wallets.map((wallet) => wallet.group === group ? { ...wallet, group: "alpha" } : wallet);
-      renderWalletGroups();
-      renderWalletChecks();
-    });
-
-    document.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-action='delete-project']");
-      if (!button) return;
-      event.stopPropagation();
-      if (state.projects.length <= 1) return;
-      const projectId = Number(button.dataset.projectId);
-      state.projects = state.projects.filter((project) => project.id !== projectId);
-      if (state.activeProjectId === projectId) state.activeProjectId = state.projects[0].id;
-      renderProjects();
-      renderWalletChecks();
-    });
-
-    document.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-action='toggle-task']");
-      if (!button) return;
-      const task = state.terminalTasks.find((item) => item.id === Number(button.dataset.taskId));
-      if (!task) return;
-      task.running = !task.running;
-      renderTaskControls();
-    });
-
-    document.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-action='delete-task']");
-      if (!button) return;
-      state.terminalTasks = state.terminalTasks.filter((task) => task.id !== Number(button.dataset.taskId));
-      renderTaskControls();
-    });
-
-    document.addEventListener("click", (event) => {
-      if (!event.target.matches("[data-group]")) return;
-      document.querySelectorAll("#walletChecks input").forEach((input) => {
-        input.checked = event.target.dataset.group === "all" || input.dataset.group === event.target.dataset.group;
-      });
     });
 
     els.tradeSubmit.addEventListener("click", () => executeTrade(state.tradeSide));
@@ -1798,7 +1673,7 @@
       els.walletList.innerHTML = state.wallets.map((wallet) => `
         <button class="wallet-item ${wallet.id === state.activeWalletId ? "active" : ""}" data-wallet-id="${wallet.id}">
           <div class="wallet-line">
-            <strong>${wallet.name}</strong>
+            <strong>${wallet.live ? `<span title="${wallet.online ? "агент на связи" : "агент не на связи"}" style="color:${wallet.online ? "#22c55e" : "#6b7280"}">●</span> ` : ""}${wallet.name}</strong>
             <span class="${pnlClass(wallet)}">${pnlText(wallet)}</span>
           </div>
           <div class="wallet-line">
@@ -1816,13 +1691,23 @@
       });
 
       const wallet = activeWallet();
+      if (!wallet) {
+        els.walletTitle.textContent = "Нет кошельков";
+        els.walletAddress.textContent = "Добавьте кошелёк кнопкой слева";
+        els.walletBalance.textContent = "—"; els.walletPnl.textContent = "—"; els.walletPnl.className = "muted";
+        els.walletTrades.textContent = "0"; els.walletWinrate.textContent = "—";
+        els.walletTradesTable.innerHTML = "";
+        renderWalletChecks();
+        return;
+      }
       els.walletTitle.textContent = wallet.name;
-      els.walletAddress.textContent = wallet.address;
-      els.walletBalance.textContent = wallet.live ? `${formatUsd(wallet.usdc)} USDC` : `${wallet.balance} SOL`;
+      els.walletAddress.textContent = wallet.fullAddress || wallet.address;
+      els.walletBalance.textContent = wallet.live ? `${formatUsd(wallet.usdc)} USDC · ${wallet.balance} SOL` : `${wallet.balance} SOL`;
       els.walletPnl.textContent = pnlText(wallet);
       els.walletPnl.className = pnlClass(wallet);
       els.walletTrades.textContent = wallet.trades;
-      els.walletWinrate.textContent = wallet.live ? "—" : `${wallet.winrate}%`;
+      els.walletWinrate.textContent = wallet.winrate == null ? "—" : `${wallet.winrate}%`;
+      syncWalletEdit(wallet);
 
       els.walletTradesTable.innerHTML = walletTradeRows(wallet).map((trade) => `
         <tr>
@@ -1853,7 +1738,7 @@
       }).join("");
 
       els.terminalGroupButtons.innerHTML = state.walletGroups.map((group) => `
-        <button class="btn" data-group="${group}">${group === "all" ? "All" : group}</button>
+        <button class="btn" data-pick-group="${group}">${group === "all" ? "All" : group}</button>
       `).join("");
     }
 
@@ -1887,11 +1772,13 @@
       const project = activeProject();
       const totalUsdc = state.wallets.reduce((sum, wallet) => sum + wallet.usdc, 0);
       const totalTokens = state.wallets.reduce((sum, wallet) => sum + walletTokens(wallet), 0);
-      const weightedPnl = state.wallets.reduce((sum, wallet) => sum + wallet.pnl, 0) / state.wallets.length;
+      const weightedPnl = state.wallets.length ? state.wallets.reduce((sum, wallet) => sum + wallet.pnl, 0) / state.wallets.length : 0;
       els.projectMetrics.innerHTML = [
         `<div class="project-title-block"><span class="label">Название / тикер</span><strong>${project.name} ${project.ticker}</strong></div>`,
         metricHtml("Market cap", project.cap),
-        metricHtml("FOMO holders", project.holders),
+        metricHtml("Ликвидность", project.liquidity),
+        metricHtml("Цена", project.price || "—"),
+        metricHtml("Наши кошельки с токеном", project.holders),
         metricHtml("Supply", project.supply),
         metricHtml("Общий баланс", `${formatUsd(totalUsdc)} · ${formatCompact(totalTokens)} tokens`),
         (() => {
@@ -1909,8 +1796,8 @@
     function renderWalletChecks() {
       els.walletChecks.innerHTML = state.wallets.map((wallet, index) => `
         <label class="wallet-select-row">
-          <input type="checkbox" value="${wallet.id}" data-group="${wallet.group}" ${isChecked(wallet.id) ? "checked" : ""}>
-          <span class="wallet-cell wallet-name" title="${wallet.name}">${wallet.name}</span>
+          <input type="checkbox" value="${wallet.id}" data-wgroup="${wallet.group}" ${isChecked(wallet.id) ? "checked" : ""}>
+          <span class="wallet-cell wallet-name" title="${wallet.name}${wallet.live ? (wallet.online ? " · агент на связи" : " · агент не на связи") : ""}">${wallet.live ? `<span style="color:${wallet.online ? "#22c55e" : "#6b7280"}">●</span> ` : ""}${wallet.name}</span>
           <span class="wallet-cell wallet-usdc" title="${formatUsd(wallet.usdc)}">${formatUsd(wallet.usdc)}</span>
           <span class="wallet-cell wallet-tokens" title="${formatCompact(walletTokens(wallet))}">${formatCompact(walletTokens(wallet))}</span>
           <span class="wallet-cell wallet-share">${supplyShare(walletTokens(wallet))}</span>
@@ -1932,9 +1819,9 @@
           <span class="side ${tx.side}">${tx.side.toUpperCase()}</span>
           <div>
             <strong>${tx.wallet} ${tx.project}</strong>
-            <div class="muted">${tx.type === "error" ? tx.reason : `${tx.amount} · supply ${tx.supply} · PNL <span class="${tx.pnl.startsWith("+") ? "positive" : "negative"}">${tx.pnl}</span>`}</div>
+            <div class="muted">${tx.type === "error" ? tx.reason : `${tx.amount} · supply ${tx.supply} · PNL <span class="${tx.pnl.startsWith("+") ? "positive" : tx.pnl.startsWith("-") ? "negative" : "muted"}">${tx.pnl}</span>`}</div>
           </div>
-          <a href="${tx.link}" target="_blank" rel="noreferrer">Solscan</a>
+          ${tx.link && tx.link !== "#" ? `<a href="${tx.link}" target="_blank" rel="noreferrer">Solscan</a>` : `<span class="muted">—</span>`}
         </div>
       `).join("");
     }
@@ -1949,13 +1836,17 @@
         return;
       }
       els.taskControls.innerHTML = state.terminalTasks.map((task) => {
+        const when = (task.lastRunAt ? ` · последний ${new Date(task.lastRunAt).toLocaleTimeString("ru-RU")}` : "");
+        const limit = task.maxRuns ? ` / ${task.maxRuns}` : "";
         const details = task.side === "buy"
-          ? `${task.range} · каждые ${task.frequency}`
-          : `${task.percent} баланса · каждые +${task.frequency} роста`;
+          ? `$${task.usdMin}–$${task.usdMax} каждые ${task.everySec} сек.`
+          : `${task.percent}% баланса при росте цены на +${task.stepPct}%`;
+        const err = task.lastError ? `<div class="negative" style="font-size:12px;margin-top:4px;word-break:break-word">${escapeHtml(task.lastError)}</div>` : "";
         return `
           <div class="task-item" data-task-id="${task.id}">
-            <div class="task-item-head"><span class="side ${task.side}">${task.side.toUpperCase()}</span><strong>${task.project}</strong></div>
-            <span class="task-summary">${details}</span>
+            <div class="task-item-head"><span class="side ${task.side}">${task.side.toUpperCase()}</span><strong>${escapeHtml(task.ticker)}</strong></div>
+            <span class="task-summary">${details}<br>кошельков: ${task.accounts.length} · запусков: ${task.runs}${limit}${when}</span>
+            ${err}
             <div class="task-item-actions">
               <button class="btn ${task.running ? "btn-danger" : "btn-primary"}" data-action="toggle-task" data-task-id="${task.id}">${task.running ? "Остановить" : "Запустить"}</button>
               <button class="btn btn-danger btn-icon" data-action="delete-task" data-task-id="${task.id}" title="Удалить задачу" aria-label="Удалить задачу">×</button>
@@ -2082,12 +1973,26 @@
           project: p ? p.ticker : (t.mint || "").slice(0, 6) + "…",
           side: t.side === "error" ? "Error" : t.side === "buy" ? "Buy" : "Sell",
           amount: t.amount || "—",
-          supply: "—",
-          pnl: "—",
+          supply: t.supplyPct != null ? t.supplyPct + "%" : "—",
+          pnl: t.pnlPct != null ? `${t.pnlPct >= 0 ? "+" : ""}${t.pnlPct}%` : "—",
         };
       });
     }
 
+    let walletEditFor = "";
+    function syncWalletEdit(wallet) {
+      const rename = document.getElementById("walletRenameInput");
+      const sel = document.getElementById("walletGroupSelect");
+      const key = wallet.name + "|" + wallet.group;
+      if (walletEditFor === key || document.activeElement === rename) return; // не затираем ввод пользователя
+      walletEditFor = key;
+      rename.value = wallet.name;
+      if (window.fillGroupSelects) window.fillGroupSelects();
+      sel.value = state.walletGroups.includes(wallet.group) ? wallet.group : "all";
+    }
+    function escapeHtml(v) {
+      return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
     function randomSegment() {
       return Math.random().toString(36).slice(2, 6).toUpperCase();
     }
@@ -2136,22 +2041,59 @@
         if (!res.ok) throw new Error(json.error || 'сервер ответил ' + res.status);
         return json;
       }
+      // запросы, меняющие данные, идут только с заголовком панели
+      const act = (path, method = 'POST', body) =>
+        api(path, { method, headers: { 'X-Panel': '1' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const $ = (id) => document.getElementById(id);
+      // обычный делегированный клик: кнопки перерисовываются, поэтому вешаем на document
+      const on = (selector, fn) => document.addEventListener('click', (e) => {
+        const el = e.target.closest(selector);
+        if (el) fn(el, e);
+      });
 
       // проекты (mint-ы) храним в браузере, ключей там нет
       // демо-проекты визуала (FomoPulse, NovaFlow, BlitzNet) с выдуманными mint убираем
       const isDemo = (p) => !p.mint || /^(FoMo1|Nova2|Blitz3|MintDemo)/.test(p.mint);
+      const placeholder = () => ({ id: 1, ticker: '—', name: 'Добавьте проект', mint: '', cap: '—', holders: '—', liquidity: '—', supply: '—', supplyRaw: 0, tax: '—', age: '—' });
       let list = [];
       try { const saved = JSON.parse(localStorage.getItem('terminal.projects') || 'null'); if (Array.isArray(saved)) list = saved; } catch {}
       list = list.filter((p) => !isDemo(p));
-      if (!list.length) list = [{ id: 1, ticker: '—', name: 'Добавьте проект', mint: '', cap: '—', holders: '—', liquidity: '—', supply: '—', supplyRaw: 0, tax: '—', age: '—' }];
+      if (!list.length) list = [placeholder()];
       state.projects = list; state.activeProjectId = list[0].id;
-      setInterval(() => { try { localStorage.setItem('terminal.projects', JSON.stringify(state.projects.filter((p) => !isDemo(p)))); } catch {} }, 3000);
+      const saveProjects = () => { try { localStorage.setItem('terminal.projects', JSON.stringify(state.projects.filter((p) => !isDemo(p)))); } catch {} };
+      setInterval(saveProjects, 3000);
+
+      // ---------- кошельки ----------
+      let groupInfo = [];
+      const fillGroupSelects = () => {
+        for (const id of ['walletGroupSelect', 'walletGroupInput']) {
+          const el = $(id); if (!el) continue;
+          const keep = el.value;
+          el.innerHTML = state.walletGroups.map((g) => `<option value="${escapeHtml(g)}">${g === 'all' ? 'all (без группы)' : escapeHtml(g)}</option>`).join('');
+          if (keep && state.walletGroups.includes(keep)) el.value = keep;
+        }
+      };
+      window.fillGroupSelects = fillGroupSelects;
+
+      function loginStats(rows, journal) {
+        if (rows) {
+          $('loginWallets').textContent = rows.length + ' / 100';
+          const pnl = rows.reduce((a, w) => a + Number(w.pnl || 0), 0);
+          $('loginPnl').textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2);
+          $('loginPnl').className = pnl > 0 ? 'positive' : pnl < 0 ? 'negative' : 'muted';
+        }
+        if (journal) {
+          const errs = journal.filter((t) => t.side === 'error').length;
+          $('loginErrors').textContent = errs;
+          $('loginErrors').className = errs ? 'negative' : 'muted';
+        }
+      }
 
       async function loadWallets() {
         try {
-          const rows = await api('/wallets');
+          const [rows, groups] = await Promise.all([api('/wallets'), api('/groups')]);
           setOk(true);
-          if (!rows.length) return;
+          groupInfo = groups;
           state.wallets = rows.map((r) => ({
             id: r.id, name: r.name, fullAddress: r.address,
             address: r.address.slice(0, 4) + '...' + r.address.slice(-4),
@@ -2162,11 +2104,14 @@
             pnlPercent: Number(r.pnlPercent ?? 0),
             valueUsd: Number(r.valueUsd ?? 0),
             invested: Number(r.invested ?? 0),
-            trades: r.trades, winrate: 0, statsError: r.statsError,
+            trades: r.trades, winrate: r.winrate, statsError: r.statsError,
           }));
-          if (!state.wallets.some((w) => w.id === state.activeWalletId)) state.activeWalletId = state.wallets[0].id;
-          state.walletGroups = ['all', ...new Set(state.wallets.map((w) => w.group).filter((g) => g && g !== 'all'))];
+          if (!state.wallets.some((w) => w.id === state.activeWalletId) && state.wallets.length) state.activeWalletId = state.wallets[0].id;
+          state.walletGroups = groups.map((g) => g.name);
+          fillGroupSelects();
+          loginStats(rows, null);
           render();
+          return rows;
         } catch (e) { setOk(false); log('кошельки:', e.message); }
       }
 
@@ -2180,38 +2125,46 @@
             return {
               type: err ? 'error' : 'trade', side: t.side, wallet: t.wallet,
               project: p ? p.ticker : (t.mint || '').slice(0, 6) + '…',
-              amount: t.amount || '—', supply: '—', pnl: '+0.0%',
+              amount: t.usd != null && t.side === 'sell' ? `${t.amount} (≈$${t.usd})` : (t.amount || '—'),
+              supply: t.supplyPct != null ? t.supplyPct + '%' : '—',
+              pnl: t.pnlPct != null ? `${t.pnlPct >= 0 ? '+' : ''}${t.pnlPct}%` : '—',
               link: t.sig ? 'https://solscan.io/tx/' + t.sig : '#',
               reason: err ? 'Причина ошибки: ' + (t.error || 'неизвестно') : undefined,
             };
           });
+          loginStats(null, rows.slice(0, 25));
           renderTransactions();
           renderWallets();
         } catch (e) { log('транзакции:', e.message); }
       }
 
-      let tokenFor = '';
-      async function loadToken() {
+      // ---------- токен проекта ----------
+      let tokenFor = '', tokenAt = 0;
+      const fmtPrice = (v) => (v ? '$' + (v < 0.01 ? Number(v).toPrecision(3) : Number(v).toFixed(4)) : '—');
+      async function loadToken(force) {
         const p = activeProject();
-        if (!serverOk || !p || p.mint === tokenFor) return;
-        tokenFor = p.mint;
+        if (!serverOk || !p || !p.mint) return;
+        if (!force && p.mint === tokenFor && Date.now() - tokenAt < 30000) return;
+        tokenFor = p.mint; tokenAt = Date.now();
         try {
           const t = await api('/token?mint=' + encodeURIComponent(p.mint));
-          // демо-цифры не оставляем рядом с реальным mint: cap/holders/liquidity нужен источник цены
-          Object.assign(p, { supply: formatCompact(t.supply), supplyRaw: t.supply, cap: '—', holders: '—', liquidity: '—', tax: '—' });
+          const usd = (v) => (v ? '$' + formatCompact(v) : '—');
+          Object.assign(p, { supply: formatCompact(t.supply), supplyRaw: t.supply, cap: usd(t.marketCap), liquidity: usd(t.liquidity), holders: String(t.holders ?? 0), price: fmtPrice(t.priceUsd), tax: '—' });
+          if (p.autoName && t.symbol) { p.name = t.name || t.symbol; p.ticker = '$' + t.symbol.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); p.autoName = false; }
           render();
         } catch (e) {
+          tokenFor = ''; // повторим на следующем опросе
           p.supply = '—'; render();
           log('токен не найден ончейн:', e.message);
         }
       }
-
       window.loadProjectToken = loadToken;
 
       const selectedNames = () =>
         [...document.querySelectorAll('#walletChecks input:checked')]
           .map((b) => state.wallets.find((w) => w.id === Number(b.value))?.name).filter(Boolean);
 
+      // ---------- сделка ----------
       function parseAmount(side) {
         const raw = (els.tradeAmount.value || '').trim().replace(',', '.');
         if (side === 'sell') {
@@ -2238,13 +2191,13 @@
           const p = activeProject();
           if (!p.mint) throw new Error('сначала добавь проект с адресом mint');
           const amt = parseAmount(side);
-          if (!confirm(`${side.toUpperCase()} ${p.ticker}\n${amt.label}\nКошельков: ${names.length}\n${names.join(', ')}\n\n${p.mint}`)) return;
+          const ask = $('priorityFee').value !== '0';
+          if (ask && !confirm(`${side.toUpperCase()} ${p.ticker}\n${amt.label}\nКошельков: ${names.length}\n${names.join(', ')}\n\n${p.mint}`)) return;
 
           busy = true; els.tradeSubmit.disabled = true;
           const { label, ...rest } = amt;
-          const rows = await api('/trade', {
-            method: 'POST', headers: { 'X-Panel': '1' },
-            body: JSON.stringify({ direction: side, tokenId: p.mint + ':' + CHAIN, accounts: names, ...rest }),
+          const rows = await act('/trade', 'POST', {
+            direction: side, tokenId: p.mint + ':' + CHAIN, accounts: names, jitterMax: Number($('slippage').value) || 0, ...rest,
           });
           const failed = rows.filter((r) => !r.ok);
           if (failed.length) alert('Не прошло:\n' + failed.map((r) => r.name + ': ' + r.error).join('\n'));
@@ -2252,15 +2205,11 @@
         finally { busy = false; els.tradeSubmit.disabled = false; loadTransactions(); setTimeout(loadWallets, 3000); }
       }
 
-      // перехват в фазе захвата: демо-обработчики визуала не должны рисовать выдуманные сделки
-      const block = (selector, fn) => document.addEventListener('click', (e) => {
-        if (!e.target.closest(selector)) return;
-        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); fn();
+      // перехват в фазе захвата: демо-обработчик визуала не должен рисовать выдуманные сделки
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest("[data-action='execute-trade']")) return;
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); executeTrade();
       }, true);
-      block("[data-action='execute-trade']", executeTrade);
-      block("[data-action='create-wallet']", () => alert('Кошельки добавляются в accounts.config.json на сервере. Приватные ключи через браузерную форму не вводим.'));
-      block("[data-action='delete-wallet']", () => alert('Кошельки удаляются в accounts.config.json.'));
-      block("[data-action='toggle-task']", () => alert('Автоматизации пока не подключены к бэку.'));
 
       // быстрые кнопки и значение по умолчанию зависят от Buy/Sell
       const QUICK = { buy: ['1', '2', '5', '10'], sell: ['25%', '50%', '75%', '100%'] };
@@ -2273,25 +2222,147 @@
         document.querySelectorAll('[data-amount]').forEach((b, i) => { b.textContent = QUICK[side][i]; b.dataset.amount = QUICK[side][i]; });
         els.tradeAmount.value = side === 'sell' ? '100%' : '2';
       });
-      // Fomo сам собирает транзакцию: эти параметры ни на что не влияют, не вводим в заблуждение
-      for (const id of ['slippage', 'priorityFee']) {
-        const el = document.getElementById(id);
-        el.disabled = true;
-        el.title = 'Пока не влияет: транзакцию собирает Fomo';
-        el.closest('.field').style.opacity = '.4';
-      }
 
-      // опрос только своего сервера (он отдаёт кэш), пока вкладка видна
+      // ---------- добавить / удалить / изменить кошелёк ----------
+      on("[data-action='create-wallet']", async () => {
+        const status = $('walletModalStatus');
+        const name = ($('walletNameInput').value || '').trim() || `acc${state.wallets.length + 1}`;
+        const secret = ($('walletPrivateKeyInput').value || '').trim();
+        if (!secret) { status.textContent = 'вставь приватный ключ'; return; }
+        status.textContent = 'сохраняю…';
+        try {
+          const r = await act('/accounts', 'POST', { name, group: $('walletGroupInput').value || 'all', secret });
+          $('walletPrivateKeyInput').value = ''; $('walletNameInput').value = ''; status.textContent = '';
+          closeWalletModal();
+          await loadWallets();
+          const w = state.wallets.find((x) => x.name === r.name);
+          if (w) { state.activeWalletId = w.id; render(); }
+        } catch (e) { status.textContent = 'ошибка: ' + e.message; }
+      });
+
+      on("[data-action='delete-wallet']", async () => {
+        const w = activeWallet();
+        if (!w) return;
+        if (!confirm(`Удалить кошелёк ${w.name} (${w.fullAddress || w.address})?\nКлюч будет удалён из accounts.config.json. История сделок сохранится.`)) return;
+        try { await act('/accounts?name=' + encodeURIComponent(w.name), 'DELETE'); state.activeWalletId = 0; await loadWallets(); }
+        catch (e) { alert(e.message); }
+      });
+
+      $('walletRenameBtn').addEventListener('click', async () => {
+        const w = activeWallet(); if (!w) return;
+        const newName = $('walletRenameInput').value.trim();
+        const group = $('walletGroupSelect').value;
+        try {
+          await act('/accounts', 'PATCH', { name: w.name, group, newName: newName && newName !== w.name ? newName : undefined });
+          await loadWallets();
+        } catch (e) { alert(e.message); }
+      });
+      $('walletCopyBtn').addEventListener('click', async () => {
+        const w = activeWallet(); if (!w) return;
+        const text = w.fullAddress || w.address;
+        try { await navigator.clipboard.writeText(text); }
+        catch { const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); }
+        const btn = $('walletCopyBtn'); const old = btn.textContent; btn.textContent = 'Скопировано'; setTimeout(() => { btn.textContent = old; }, 1200);
+      });
+
+      // ---------- группы ----------
+      on("[data-action='create-wallet-group']", async () => {
+        const input = $('walletGroupName');
+        const value = input.value.trim().toLowerCase();
+        if (!value) return;
+        try { await act('/groups', 'POST', { name: value }); input.value = ''; closeGroupModal(); await loadWallets(); }
+        catch (e) { alert(e.message); }
+      });
+      on("[data-action='delete-wallet-group']", async (btn) => {
+        const g = btn.dataset.group;
+        if (!g || g === 'all') return;
+        if (!confirm(`Удалить группу «${g}»? Кошельки из неё перейдут в all.`)) return;
+        try { await act('/groups?name=' + encodeURIComponent(g), 'DELETE'); await loadWallets(); }
+        catch (e) { alert(e.message); }
+      });
+      // кнопка группы в терминале: отметить кошельки этой группы (чекбоксы больше не реагируют как кнопки)
+      on('[data-pick-group]', (btn) => {
+        const g = btn.dataset.pickGroup;
+        document.querySelectorAll('#walletChecks input').forEach((input) => { input.checked = g === 'all' || input.dataset.wgroup === g; });
+      });
+
+      // ---------- проекты ----------
+      on("[data-action='create-project']", async () => {
+        const mint = $('projectMintInput').value.trim().split(':')[0];
+        if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) { alert('Нужен настоящий адрес mint токена Solana (32–44 символа)'); return; }
+        if (state.projects.some((project) => project.mint === mint)) { alert('Такой проект уже добавлен'); return; }
+        const id = Math.max(0, ...state.projects.map((project) => project.id)) + 1;
+        const typed = $('projectNameInput').value.trim().replace(/[<>&"']/g, '');
+        const name = typed || mint.slice(0, 6);
+        const ticker = '$' + name.replace(/^\$/, '').slice(0, 8).toUpperCase();
+        state.projects = state.projects.filter((project) => project.mint); // убираем заглушку
+        state.projects.unshift({ id, ticker, name, mint, autoName: !typed, cap: '—', holders: '—', liquidity: '—', supply: '—', supplyRaw: 0, tax: '—', age: '—' });
+        state.activeProjectId = id;
+        $('projectMintInput').value = ''; $('projectNameInput').value = '';
+        saveProjects();
+        closeProjectModal();
+        render();
+        loadToken(true);
+      });
+      on("[data-action='delete-project']", (btn, e) => {
+        e.stopPropagation();
+        const projectId = Number(btn.dataset.projectId);
+        state.projects = state.projects.filter((project) => project.id !== projectId);
+        if (!state.projects.length) state.projects = [placeholder()];
+        if (!state.projects.some((x) => x.id === state.activeProjectId)) state.activeProjectId = state.projects[0].id;
+        saveProjects();
+        render();
+        loadToken();
+      });
+
+      // ---------- автоматизации (работают на сервере) ----------
+      async function loadTasks() {
+        try { state.terminalTasks = await api('/tasks'); renderTaskControls(); } catch (e) { log('задачи:', e.message); }
+      }
+      on("[data-action='create-task']", async () => {
+        const status = $('taskModalStatus');
+        const p = activeProject();
+        const names = selectedNames();
+        if (!p.mint) { status.textContent = 'сначала добавь проект с адресом mint'; return; }
+        if (!names.length) { status.textContent = 'отметь кошельки в списке «Выбор кошельков»'; return; }
+        const body = state.taskSide === 'buy'
+          ? { usdMin: $('taskAmountMin').value, usdMax: $('taskAmountMax').value, everySec: $('taskEvery').value, maxRuns: $('taskMaxRuns').value }
+          : { percent: $('taskSellPercent').value, stepPct: $('taskSellFrequency').value, maxRuns: $('taskMaxRuns').value };
+        status.textContent = 'создаю…';
+        try {
+          await act('/tasks', 'POST', { side: state.taskSide, mint: p.mint, ticker: p.ticker, accounts: names, ...body });
+          status.textContent = '';
+          closeTaskModal();
+          await loadTasks();
+        } catch (e) { status.textContent = 'ошибка: ' + e.message; }
+      });
+      on("[data-action='toggle-task']", async (btn) => {
+        const t = state.terminalTasks.find((x) => x.id === Number(btn.dataset.taskId));
+        if (!t) return;
+        if (!t.running && !confirm(`Запустить ${t.side.toUpperCase()}-задачу ${t.ticker} на ${t.accounts.length} кошельках?\nОна будет тратить реальные средства, пока её не остановить.`)) return;
+        try { await act(`/tasks/${t.running ? 'stop' : 'start'}?id=${t.id}`, 'POST'); await loadTasks(); }
+        catch (e) { alert(e.message); }
+      });
+      on("[data-action='delete-task']", async (btn) => {
+        try { await act('/tasks?id=' + Number(btn.dataset.taskId), 'DELETE'); await loadTasks(); }
+        catch (e) { alert(e.message); }
+      });
+
+      // ---------- опрос только своего сервера (он отдаёт кэш), пока вкладка видна ----------
       setInterval(() => { if (!document.hidden) loadWallets(); }, 10000);
       setInterval(() => { if (!document.hidden) { loadTransactions(); loadToken(); } }, 15000);
-      document.addEventListener('visibilitychange', () => { if (!document.hidden) loadWallets(); });
+      setInterval(() => { if (!document.hidden) loadTasks(); }, 5000);
+      document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadWallets(); loadTasks(); } });
       document.addEventListener('click', (e) => { if (e.target.closest('.project-row')) setTimeout(loadToken, 50); });
+      window.reloadWallets = loadWallets;
 
-      loadWallets().then(loadToken);
+      loadWallets().then(() => loadToken());
       loadTransactions();
+      loadTasks();
     })();
 
     render();
+    try { if (sessionStorage.getItem("terminal.auth") === "1") enterApp(); } catch {}
 
     // ---- добавление кошелька из интерфейса ----
     (() => {
@@ -2314,13 +2385,13 @@
           document.getElementById('awSecret').value = '';
           document.getElementById('awName').value = '';
           document.getElementById('awAddress').value = '';
-          await loadWallets();
+          await window.reloadWallets();
         } catch (e) {
           say('ошибка: ' + e.message);
         }
       });
 
-      document.getElementById('awReload')?.addEventListener('click', () => { say('обновляю...'); loadWallets().then(() => say('')); });
+      document.getElementById('awReload')?.addEventListener('click', () => { say('обновляю...'); window.reloadWallets().then(() => say('')); });
     })();
   </script>
 </body>
